@@ -23,12 +23,12 @@ To make the bundles yourself, run `python3 build.py`; they are written to `dist/
 adpaint [file ...]                 open .adi files in tabs (PNG/JPEG/BMP are imported)
 adpaint -m <side> [-s <scale>] ... paint on an advanced monitor
 adpaint convert <image> [out.adi] [-w <cells>] [--height <cells>] [-c <2-16>]
-                [-p optimised|default] [--no-dither] [--mode fit|fill|stretch] [--force]
+                [-p optimised|default] [--no-dither] [--mode bars|fill|stretch] [--force]
 adpaint setup                      enable filename completion at every boot
 adpaint help
 ```
 `convert` turns an image into an .adi without opening the editor (by default it fits the
-terminal, uses 16 colours, an optimised palette and dithering, fits with white bars when both
+terminal, uses 16 colours, an optimised palette and dithering, uses white bars (`--mode bars`) when both
 sizes are given, and writes next to the input).
 Tab completion for subcommands, options, files and monitor names is active after adpaint has
 run once; `adpaint setup` adds one line to your startup so it's there after reboots too.
@@ -50,9 +50,9 @@ run once; `adpaint setup` adds one line to your startup so it's there after rebo
 * The size at the bottom right is a button: change the **canvas** size (crop/extend) or
   **scale the image** (text boxes move along). Resizing the canvas asks which corner, side or
   the centre to keep the image at (tap a square twice, or use the arrows and Enter). Scaling
-  always gives exactly the size you enter; if that changes the aspect ratio you choose **Fit**
+  always gives exactly the size you enter; if that changes the aspect ratio you choose **Bars**
   (keep the ratio, bars in the R colour), **Fill** (keep the ratio, crop the overflow) or
-  **Stretch**, and for Fit/Fill an anchor (centre by default).
+  **Stretch**, and for Bars/Fill an anchor (centre by default).
 * Every prompt and question on the bottom row has touch buttons (OK/Cancel, Save/Discard/Cancel...),
   so nothing gets stuck on a touch-only monitor. File prompts suggest completions (greyed out):
   Tab, Right or tapping the field accepts, Up/Down cycles.
@@ -62,7 +62,9 @@ run once; `adpaint setup` adds one line to your startup so it's there after rebo
   While a box is selected, L/R in the palette set the text and background colour, and "No bg" makes
   the background transparent. When zoomed in, text boxes get a thin frame (yellow when selected)
   so you can see how the letters line up with the image. `H` / `Txt` hides the text layer; the pixels under it are still there.
-* Shortcuts: Ctrl+N/O/S/W/Q/Z/Y, Tab next tab, B F T I P tools, `[ ]` size, `, .` dither.
+* Shortcuts: Ctrl+N/O/S/W/Q/Z/Y, Tab next tab, B F T I P tools, `[ ]` size, `, .` dither,
+  E edits the L colour's RGB value (hex `RRGGBB` or `RGB`, previewed live as you type;
+  Cancel restores it).
 * When a paint would give a cell a third colour, the cell keeps the new colour plus its most
   common other colour, and any remaining pixels snap to whichever of those two is nearer.
 
@@ -73,7 +75,7 @@ Files dropped while a prompt is open are imported once it closes. CC: Tweaked li
 dropped file can be (server config `upload_max_size`), so very large photos may need shrinking first.
 
 You choose the size in cells (a cell is 2x3 pixels; if it changes the aspect ratio you get the
-same Fit / Fill / Stretch choice as when scaling, with Fit bars in the R colour), dithering, an **optimised**
+same Bars / Fill / Stretch choice as when scaling, with bars in the R colour), dithering, an **optimised**
 palette (median cut + k-means, stored in the file and applied to the monitor) or the
 **default** CC palette, and how many **colours** (2-16) the image may use. With fewer
 colours, the spare palette slots stay free for drawing on top later (with an optimised palette

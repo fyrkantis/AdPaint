@@ -22,7 +22,7 @@ Usage:
    -c, --colours <n>  colours to use, 2-16 (16)
    -p, --palette <p>  optimised (default) or default
    -n, --no-dither    don't dither
-       --mode <m>     fit (default)/fill/stretch
+       --mode <m>     bars (default)/fill/stretch
                       when the aspect ratio changes
    -f, --force        overwrite out.adi
  adpaint setup        filename completion at boot
@@ -65,7 +65,7 @@ local function completeArgs(sh, index, text, previous)
   local prev = previous[#previous]
   if NUMBER_OPTS[prev] then return {} end
   if prev == "-m" then return c.peripheral(sh, text, previous, true) end
-  if prev == "--mode" then return c.choice(sh, text, previous, { "fit", "fill", "stretch" }, true) end
+  if prev == "--mode" then return c.choice(sh, text, previous, { "bars", "fill", "stretch" }, true) end
   if prev == "-p" or prev == "--palette" then
     return c.choice(sh, text, previous, { "optimised", "default" }, true)
   end
@@ -125,8 +125,9 @@ local function cliConvert(argv)
     elseif a == "-n" or a == "--no-dither" then opt.dither = false; i = i + 1
     elseif a == "--mode" then
       opt.mode = (v or ""):lower()
+      if opt.mode == "bars" then opt.mode = "fit" end -- "fit" still accepted
       if opt.mode ~= "fit" and opt.mode ~= "fill" and opt.mode ~= "stretch" then
-        printError("--mode must be fit, fill or stretch"); return
+        printError("--mode must be bars, fill or stretch"); return
       end
       i = i + 2
     elseif a == "-f" or a == "--force" then force = true; i = i + 1
@@ -1006,9 +1007,19 @@ end
 -- `complete(text)` may return a list of suffixes (like read()'s completion):
 -- the current one is shown greyed out after the text. Tab (or tapping the
 -- suggestion) accepts it, Up/Down cycle through the alternatives.
-local function prompt(label, default, complete)
+local function prompt(label, default, complete, onChange)
+  -- A key that opened this prompt (shortcut or a choose() answer) is
+  -- followed by its char event: drop it so it doesn't end up in the text.
+  os.queueEvent("adpaint_flush")
+  while true do
+    local ev = { os.pullEventRaw() }
+    if ev[1] == "adpaint_flush" then break
+    elseif ev[1] == "file_transfer" then pendingFiles[#pendingFiles + 1] = ev[2]
+    elseif ev[1] == "key" or ev[1] == "key_up" then trackModifiers(ev) end
+  end
   local text = tostring(default or "")
   local pos = #text
+  local lastText = nil
   local comps, ci = nil, 1
   local function recomplete()
     comps, ci = nil, 1
@@ -1019,6 +1030,7 @@ local function prompt(label, default, complete)
   end
   recomplete()
   while true do
+    if onChange and text ~= lastText then onChange(text); lastText = text end
     local hits, fieldX, fieldEnd
     draw(function()
       win.setCursorPos(1, H)
@@ -1196,7 +1208,7 @@ end
 -- Returns mode ("fit"/"fill"/"stretch"), ax, ay, or nil if cancelled.
 local function chooseScaleMode()
   local mode = choose("New aspect ratio:",
-    { { "Fit", "fit" }, { "Fill", "fill" }, { "Stretch", "stretch" }, { "Cancel", "c" } })
+    { { "Bars", "fit" }, { "Fill", "fill" }, { "Stretch", "stretch" }, { "Cancel", "c" } })
   if mode ~= "fit" and mode ~= "fill" and mode ~= "stretch" then return nil end
   if mode == "stretch" then return mode, 0.5, 0.5 end
   local ax, ay = chooseAnchor(mode == "fit" and "Place image at:" or "Keep this part:", 5)
@@ -1481,15 +1493,31 @@ local function sizeMenu()
   if r == "canvas" then resizeCanvas() elseif r == "image" then scaleImage() end
 end
 
+-- Parses "RRGGBB", "#RRGGBB", "RGB" or "#RGB" into 0xRRGGBB (or nil).
+local function parseColour(t)
+  t = t:gsub("^%s*#?", ""):gsub("%s+$", "")
+  if t:match("^%x%x%x%x%x%x$") then return tonumber(t, 16) end
+  if t:match("^%x%x%x$") then
+    local r, g, b = t:sub(1, 1), t:sub(2, 2), t:sub(3, 3)
+    return tonumber(r .. r .. g .. g .. b .. b, 16)
+  end
+end
+
+-- Edits palette slot L. Every valid value typed is previewed right away
+-- (on the canvas and the palette row); Cancel restores the old colour.
 local function editColour()
   local d = doc()
   local pal = palette()
-  local r = prompt(("Colour %d hex RRGGBB: "):format(primary), ("%06x"):format(pal[primary]))
-  if not r or not r:match("^#?%x%x%x%x%x%x$") then return end
+  local idx = primary
+  local r = prompt(("Colour %d (hex RRGGBB): "):format(idx), ("%06x"):format(pal[idx]), nil, function(t)
+    win.setPaletteColour(2 ^ idx, parseColour(t) or pal[idx])
+  end)
+  local v = r and parseColour(r)
+  if not v or v == pal[idx] then applyPalette(); return end
   beginOp("full")
   local np = {}
   for i = 0, 15 do np[i] = pal[i] end
-  np[primary] = tonumber(r:gsub("#", ""), 16)
+  np[idx] = v
   d.img.palette = np
   endOp()
   applyPalette()
@@ -1511,6 +1539,7 @@ local HELP = {
   "Drag image files onto the window to import them.",
   "",
   "B brush  F fill  T text  I pick  P pan",
+  "E edit colour L (previewed as you type)",
   "[ ] brush size  , . brush dither  Z zoom  H text layer",
   "Ctrl: N new  O open  S save  W close tab  Q quit",
   "      Z undo  Y redo  Tab next tab",
@@ -1540,7 +1569,7 @@ menuItems = {
       end end },
   { "Resize canvas...", "", resizeCanvas },
   { "Scale image...", "", scaleImage },
-  { "Edit colour L...", "", editColour },
+  { "Edit colour L...", "E", editColour },
   { "Default palette", "", resetPalette },
   { "Undo", "^Z", function() undo() end },
   { "Redo", "^Y", function() undo(true) end },
@@ -1680,6 +1709,7 @@ local SHORTCUTS = {
   [keys.period] = function() dither = min(8, dither + 1) end,
   [keys.z] = function() setZoom(doc().zoom % #ZOOMS + 1) end,
   [keys.h] = function() showText = not showText end,
+  [keys.e] = function() editColour() end,
   [keys.tab] = function() cur = cur % #docs + 1; applyPalette() end,
   [keys.left] = function() pan(shift and -8 or -2, 0) end,
   [keys.right] = function() pan(shift and 8 or 2, 0) end,
