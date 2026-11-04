@@ -139,6 +139,8 @@ end
 ---------------------------------------------------------------------------
 local function viewH() return H - 3 end
 
+local NEW_W, NEW_H = 18, 24 -- default size of a new canvas, in cells
+
 local function newDoc(img, path)
   return { img = img, path = path, dirty = false, zoom = 1, vx = 0, vy = 0, undo = {}, redo = {} }
 end
@@ -155,7 +157,7 @@ local function addDoc(d)
 end
 
 local function blankDoc(w, h)
-  return newDoc(adimg.new(w or W, h or viewH(), 0))
+  return newDoc(adimg.new(w or NEW_W, h or NEW_H, 0))
 end
 
 
@@ -223,8 +225,9 @@ local function setPx(img, i, c)
   end
 end
 
-local function ditherOn(x, y)
-  return BAYER[(y % 4) * 4 + x % 4 + 1] < dither * 2
+-- `level` is the coverage out of 16 (defaults to the dither setting).
+local function ditherOn(x, y, level)
+  return BAYER[(y % 4) * 4 + x % 4 + 1] < (level or dither * 2)
 end
 
 -- Restores the "max 2 colours per cell" rule after painting `keep`.
@@ -268,6 +271,17 @@ local function stamp(ux, uy, color, native)
   local lo, hi = -floor((s - 1) / 2), floor(s / 2)
   local c = (s % 2 == 0) and 0.5 or 0
   local r2 = (s / 2) ^ 2
+  -- Soft brush: with dithering and a brush bigger than 2, coverage fades
+  -- from the dither setting at the centre to almost nothing at the rim.
+  local soft = dither < 8 and s > 2
+  local full = dither * 2
+  local bcx, bcy = ux + 0.5 + c, uy + 0.5 + c -- brush centre (brush units)
+  local rim2 = (s / 2 + 0.5) ^ 2
+  local function level(x, y) -- x, y: continuous position in brush units
+    if not soft then return full end
+    local d2 = (x - bcx) ^ 2 + (y - bcy) ^ 2
+    return full * max(0, 1 - d2 / rim2)
+  end
   local touched = {}
   for dy = lo, hi do
     for dx = lo, hi do
@@ -278,14 +292,16 @@ local function stamp(ux, uy, color, native)
           if cx >= 0 and cy >= 0 and cx < img.w and cy < img.h then
             for py = cy * 3, cy * 3 + 2 do
               for pxx = cx * 2, cx * 2 + 1 do
-                if ditherOn(pxx, py) then setPx(img, py * img.pw + pxx + 1, color) end
+                if ditherOn(pxx, py, level((pxx + 0.5) / 2, (py + 0.5) / 3)) then
+                  setPx(img, py * img.pw + pxx + 1, color)
+                end
               end
             end
             touched[cy * img.w + cx] = true
           end
         else
           local x, y = ux + dx, uy + dy
-          if x >= 0 and y >= 0 and x < img.pw and y < img.ph and ditherOn(x, y) then
+          if x >= 0 and y >= 0 and x < img.pw and y < img.ph and ditherOn(x, y, level(x + 0.5, y + 0.5)) then
             setPx(img, y * img.pw + x + 1, color)
             touched[floor(y / 3) * img.w + floor(x / 2)] = true
           end
@@ -1210,10 +1226,10 @@ local HELP = {
 }
 
 menuItems = {
-  { "New", "^N", function() local r = prompt("Size WxH: ", W .. "x" .. viewH())
+  { "New", "^N", function() local r = prompt("Size WxH: ", NEW_W .. "x" .. NEW_H)
       if not r then return end
       local w, h = r:match("(%d+)%s*[xX, ]%s*(%d+)")
-      addDoc(blankDoc(max(1, min(512, tonumber(w) or W)), max(1, min(512, tonumber(h) or viewH())))) end },
+      addDoc(blankDoc(max(1, min(512, tonumber(w) or NEW_W)), max(1, min(512, tonumber(h) or NEW_H)))) end },
   { "Open...", "^O", function() local r = prompt("Open: ", "", completePath); if r and r ~= "" then openPath(r) end end },
   { "Save", "^S", function() saveDoc() end },
   { "Save as...", "", function() saveDoc(nil, true) end },

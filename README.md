@@ -21,12 +21,14 @@ To make the bundles yourself, run `python3 build.py`; they are written to `dist/
 ## Editor
 `adpaint [file ...] [-m <monitor side> [-s <text scale>]]`
 
+* New canvases are 18x24 cells by default.
 * Tabs: the top row. `=` opens the menu, `x` closes a tab, `+` adds a blank canvas.
   Opening a PNG/JPEG/BMP imports it. Dragging image files onto the window imports them too.
 * Left click paints with the **L** colour and right click with **R**; pick both in the palette row.
   Each tab remembers its own L/R; a new tab starts with the darkest and brightest colour
   (black / white with the default palette).
-* Tools: **Brush** (size `S-+` and dither `D-+` 1..8, 8 = solid; only shown for the brush),
+* Tools: **Brush** (size `S-+` and dither `D-+` 1..8, 8 = solid; only shown for the brush.
+  With dithering, brushes bigger than 2 are soft: dense in the middle, fading towards the rim),
   **Fill** (always solid), **Text**, **Pick**, **Pan**.
 * **Zoom** (`Z`) toggles between the real teletext view and a zoomed view where each cell is
   6x6 characters (3x2 per pixel, so pixels look square). At 1x the mouse can only aim at whole
