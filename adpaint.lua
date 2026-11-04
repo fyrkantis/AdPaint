@@ -251,12 +251,13 @@ end
 -- UI colours: pick the palette entries closest to the colours we want so
 -- the interface stays readable with custom image palettes.
 ---------------------------------------------------------------------------
-local function computeUi()
+-- `skip`: a palette slot the UI must not use (the one being edited).
+local function computeUi(skip)
   local pal = palette()
   local function nearest(rgb, avoid)
     local best, bd = 0, math.huge
     for i = 0, 15 do
-      if i ~= avoid then
+      if i ~= avoid and i ~= skip then
         local d = adimg.dist(pal[i], rgb)
         if d < bd then best, bd = i, d end
       end
@@ -1503,21 +1504,130 @@ local function parseColour(t)
   end
 end
 
--- Edits palette slot L. Every valid value typed is previewed right away
--- (on the canvas and the palette row); Cancel restores the old colour.
+local function hexPrompt(idx, start, preview)
+  local r = prompt(("Colour %d hex RRGGBB: "):format(idx), ("%06x"):format(start), nil, function(t)
+    preview(parseColour(t) or start)
+  end)
+  return r and parseColour(r)
+end
+
+-- Edits palette slot L with separate R, G and B values (or hex). Changes
+-- are previewed live on the canvas; Cancel restores the original colour.
+-- Touch: << < > >> step by 16 / 1, tap a value to type it, "Hex..." for a
+-- hex code. Keyboard: Up/Down pick a channel, Left/Right step (Shift: 16),
+-- digits type a value, Enter = OK.
+local CHANNELS = { "R", "G", "B" }
 local function editColour()
   local d = doc()
   local pal = palette()
   local idx = primary
-  local r = prompt(("Colour %d (hex RRGGBB): "):format(idx), ("%06x"):format(pal[idx]), nil, function(t)
-    win.setPaletteColour(2 ^ idx, parseColour(t) or pal[idx])
-  end)
-  local v = r and parseColour(r)
-  if not v or v == pal[idx] then applyPalette(); return end
+  local orig = pal[idx]
+  local v = { adimg.rgb(orig) }
+  local ch, typed = 1, nil
+  local function value() return v[1] * 65536 + v[2] * 256 + v[3] end
+  local function preview(c) win.setPaletteColour(2 ^ idx, c) end
+  local function setAll(c) v = { adimg.rgb(c) } end
+  computeUi(idx) -- keep the interface readable while this colour changes
+  local result
+  while result == nil do
+    preview(value())
+    local hits, btns = nil, {}
+    draw(function()
+      local pw, ph = 29, 9
+      local x0 = max(1, floor((W - pw) / 2) + 1)
+      local y0 = max(2, floor((viewH() - ph) / 2) + 2)
+      win.setBackgroundColour(2 ^ ui.bar)
+      for y = y0, min(H - 2, y0 + ph - 1) do win.setCursorPos(x0, y); win.write(string.rep(" ", pw)) end
+      win.setCursorPos(x0 + 2, y0 + 1)
+      win.setTextColour(2 ^ ui.text)
+      win.write(("Colour %d  #%06x"):format(idx, value()))
+      blitAt(x0 + pw - 6, y0 + 1, "    ", ui.text, idx)
+      local function button(x, y, label, action, active)
+        blitAt(x, y, label, active and ui.dark or ui.text, active and ui.hi or ui.dark)
+        btns[#btns + 1] = { x, y, x + #label - 1, action }
+      end
+      for i = 1, 3 do
+        local y = y0 + 2 + i
+        blitAt(x0 + 2, y, CHANNELS[i], ui.text, ui.bar)
+        button(x0 + 4, y, "<<", { i, -16 })
+        button(x0 + 7, y, "<", { i, -1 })
+        button(x0 + 9, y, (" %3d "):format(v[i]), { i, "type" }, i == ch)
+        button(x0 + 15, y, ">", { i, 1 })
+        button(x0 + 17, y, ">>", { i, 16 })
+        -- a bar showing the channel's level
+        local n = floor(v[i] / 255 * 7 + 0.5)
+        blitAt(x0 + 20, y, string.rep("\127", n) .. string.rep(" ", 7 - n), ui.text, ui.dark)
+      end
+      button(x0 + 2, y0 + 7, " Hex... ", "hex")
+      win.setCursorPos(1, H)
+      win.setBackgroundColour(2 ^ ui.accent); win.setTextColour(2 ^ ui.text)
+      win.clearLine()
+      local free
+      hits, free = bottomButtons({ { "OK", "ok" }, { "Cancel", "cancel" } })
+      win.setCursorPos(1, H)
+      win.setBackgroundColour(2 ^ ui.accent)
+      win.write(("Edit colour L"):sub(1, max(0, free)))
+    end)
+    local ev = { os.pullEventRaw() }
+    local button, x, y = asClick(ev)
+    local function step(i, n) v[i] = max(0, min(255, v[i] + n)); ch = i; typed = nil end
+    if ev[1] == "terminate" then result = false
+    elseif button then
+      if y == H then
+        local r = hitButton(hits, x)
+        if r == "ok" then result = true elseif r == "cancel" then result = false end
+      else
+        for _, b in ipairs(btns) do
+          if y == b[2] and x >= b[1] and x <= b[3] then
+            local a = b[4]
+            if a == "hex" then
+              local c = hexPrompt(idx, value(), preview)
+              if c then setAll(c) end
+            elseif a[2] == "type" then
+              ch, typed = a[1], nil
+              local r = prompt(CHANNELS[a[1]] .. " (0-255): ", tostring(v[a[1]]), nil, function(t)
+                local n = tonumber(t)
+                if n and n >= 0 and n <= 255 then
+                  local w = { v[1], v[2], v[3] }
+                  w[a[1]] = floor(n)
+                  preview(w[1] * 65536 + w[2] * 256 + w[3])
+                end
+              end)
+              local n = tonumber(r or "")
+              if n then v[a[1]] = max(0, min(255, floor(n))) end
+            else
+              step(a[1], a[2])
+            end
+          end
+        end
+      end
+    elseif ev[1] == "char" and ev[2]:match("^%d$") then
+      typed = (typed or "") .. ev[2]
+      v[ch] = min(255, tonumber(typed))
+      if #typed >= 3 then typed = nil end
+    elseif ev[1] == "key" then
+      trackModifiers(ev)
+      local k = ev[2]
+      if k == keys.enter or k == keys.numPadEnter then result = true
+      elseif k == keys.up then ch = (ch - 2) % 3 + 1; typed = nil
+      elseif k == keys.down or k == keys.tab then ch = ch % 3 + 1; typed = nil
+      elseif k == keys.left then step(ch, shift and -16 or -1)
+      elseif k == keys.right then step(ch, shift and 16 or 1)
+      elseif k == keys.backspace then
+        typed = typed and typed:sub(1, -2) or tostring(v[ch]):sub(1, -2)
+        v[ch] = tonumber(typed) or 0
+      end
+    elseif ev[1] == "key_up" then trackModifiers(ev)
+    elseif ev[1] == "file_transfer" then pendingFiles[#pendingFiles + 1] = ev[2]
+    elseif ev[1] == "term_resize" or ev[1] == "monitor_resize" then onResize()
+    end
+  end
+  local c = value()
+  if not result or c == orig then applyPalette(); return end
   beginOp("full")
   local np = {}
   for i = 0, 15 do np[i] = pal[i] end
-  np[idx] = v
+  np[idx] = c
   d.img.palette = np
   endOp()
   applyPalette()
@@ -1539,7 +1649,7 @@ local HELP = {
   "Drag image files onto the window to import them.",
   "",
   "B brush  F fill  T text  I pick  P pan",
-  "E edit colour L (previewed as you type)",
+  "E edit colour L (R/G/B or hex, live preview)",
   "[ ] brush size  , . brush dither  Z zoom  H text layer",
   "Ctrl: N new  O open  S save  W close tab  Q quit",
   "      Z undo  Y redo  Tab next tab",

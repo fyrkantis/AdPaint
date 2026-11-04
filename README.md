@@ -63,8 +63,10 @@ run once; `adpaint setup` adds one line to your startup so it's there after rebo
   the background transparent. When zoomed in, text boxes get a thin frame (yellow when selected)
   so you can see how the letters line up with the image. `H` / `Txt` hides the text layer; the pixels under it are still there.
 * Shortcuts: Ctrl+N/O/S/W/Q/Z/Y, Tab next tab, B F T I P tools, `[ ]` size, `, .` dither,
-  E edits the L colour's RGB value (hex `RRGGBB` or `RGB`, previewed live as you type;
-  Cancel restores it).
+  E edits the L colour (also in the menu): separate R, G and B values with `<<` `<` `>` `>>`
+  buttons (steps of 16 / 1), tap a value to type it, or `Hex...` for a hex code. Keyboard:
+  Up/Down pick a channel, Left/Right step (Shift: 16), digits type a value. Every change is
+  previewed live; Cancel restores the colour.
 * When a paint would give a cell a third colour, the cell keeps the new colour plus its most
   common other colour, and any remaining pixels snap to whichever of those two is nearer.
 
