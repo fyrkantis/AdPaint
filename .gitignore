@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+
+# Editor / OS clutter
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+.idea/
+
+# Local test images and scratch output
+*.adi
+!examples/*.adi
+test/
