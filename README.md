@@ -35,6 +35,7 @@ run once; `adpaint setup` adds one line to your startup so it's there after rebo
 ## Editor
 * New canvases are 18x24 cells by default.
 * Tabs: the top row. `=` opens the menu, `x` closes a tab, `+` adds a blank canvas.
+  The two arrows at the top right are undo and redo (also Ctrl+Z / Ctrl+Y).
   Opening a PNG/JPEG/BMP imports it. Dragging image files onto the window imports them too.
 * Left click paints with the **L** colour and right click with **R**; pick both in the palette row.
   Each tab remembers its own L/R; a new tab starts with the darkest and brightest colour

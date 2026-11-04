@@ -812,15 +812,21 @@ local function drawTabs()
   local x = 5
   for i, d in ipairs(docs) do
     local label = " " .. docName(d) .. (d.dirty and "*" or "") .. " "
-    if x + #label + 1 > W - 2 then break end
+    if x + #label + 1 > W - 8 then break end
     local bg = i == cur and ui.bar or ui.dark
     blitAt(x, 1, label, i == cur and ui.text or ui.dim, bg)
     blitAt(x + #label, 1, "x", ui.dim, bg)
     tabHits[#tabHits + 1] = { x, x + #label - 1, i, x + #label }
     x = x + #label + 2
   end
-  blitAt(min(x, W - 1), 1, "+", ui.text, ui.dark)
-  tabHits.plus = min(x, W - 1)
+  blitAt(min(x, W - 7), 1, "+", ui.text, ui.dark)
+  tabHits.plus = min(x, W - 7)
+  -- undo / redo buttons (CC font chars 27 = left arrow, 26 = right arrow)
+  local d = doc()
+  local canUndo = #d.undo > 0 or (op ~= nil and op.changed)
+  blitAt(W - 5, 1, " \27 ", canUndo and ui.text or ui.dim, ui.bar)
+  blitAt(W - 2, 1, " \26 ", #d.redo > 0 and ui.text or ui.dim, ui.bar)
+  tabHits.undo, tabHits.redo = W - 5, W - 2
 end
 
 local function drawPalette()
@@ -1477,6 +1483,7 @@ local HELP = {
   "[ ] brush size  , . brush dither  Z zoom  H text layer",
   "Ctrl: N new  O open  S save  W close tab  Q quit",
   "      Z undo  Y redo  Tab next tab",
+  "Arrows at the top right: undo / redo.",
   "",
   "Text tool: click to add/select a box, type to edit,",
   "drag to move. Palette L/R = text / background.",
@@ -1601,6 +1608,8 @@ local function click(button, x, y)
   end
   if y == 1 then
     if x <= 3 then menuOpen = true; return end
+    if x >= tabHits.undo and x <= tabHits.undo + 2 then undo(); return end
+    if x >= tabHits.redo and x <= tabHits.redo + 2 then undo(true); return end
     for _, t in ipairs(tabHits) do
       if x >= t[1] and x <= t[2] then deselect(); cur = t[3]; applyPalette(); return end
       if x == t[4] then closeDoc(t[3]); return end
