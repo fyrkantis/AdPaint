@@ -33,6 +33,23 @@ sizes are given, and writes next to the input).
 Tab completion for subcommands, options, files and monitor names is active after adpaint has
 run once; `adpaint setup` adds one line to your startup so it's there after reboots too.
 
+## Viewer (adview)
+```
+adview <file|folder> ... [-m <side>] [--mode compromise|bars|fill] [-t <seconds>] [-o random|name]
+adview setup | help
+```
+* With `-m` the monitor's text scale is chosen automatically: **bars** uses the biggest scale at
+  which the whole image fits (bars in the image's edge colour around it), **fill** the smallest
+  scale at which the image covers the monitor (cropped, centred), and **compromise** (default)
+  whichever scale gives the least bars + cropping, with cropping counting double.
+* Several files or a folder become a slideshow: every image for `-t` seconds (default 10), in
+  random order (default, no repeats back to back) or by file name. The folder is re-read every
+  round, so new or edited images show up without restarting; Ctrl+T stops it. Put the command in
+  the computer's startup to run an ad board unattended.
+* A single image just stays on the monitor after adview exits (on the terminal, a key closes it).
+* Tab completion for files, options, modes and monitors, like adpaint (`adview setup` makes it
+  survive reboots). The old `adview <file> <monitor side>` form still works.
+
 ## Editor
 * New canvases are 18x24 cells by default.
 * Tabs: the top row. `=` opens the menu, `x` closes a tab, `+` adds a blank canvas.
