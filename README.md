@@ -18,9 +18,21 @@ Alternatively keep the source layout (`adpaint.lua` next to a `lib/` folder).
 To make the bundles yourself, run `python3 build.py`; they are written to `dist/`
 (which is not committed).
 
-## Editor
-`adpaint [file ...] [-m <monitor side> [-s <text scale>]]`
+## Command line
+```
+adpaint [file ...]                 open .adi files in tabs (PNG/JPEG/BMP are imported)
+adpaint -m <side> [-s <scale>] ... paint on an advanced monitor
+adpaint convert <image> [out.adi] [-w <cells>] [--height <cells>] [-c <2-16>]
+                [-p optimised|default] [--no-dither] [--force]
+adpaint setup                      enable filename completion at every boot
+adpaint help
+```
+`convert` turns an image into an .adi without opening the editor (by default it fits the
+terminal, uses 16 colours, an optimised palette and dithering, and writes next to the input).
+Tab completion for subcommands, options, files and monitor names is active after adpaint has
+run once; `adpaint setup` adds one line to your startup so it's there after reboots too.
 
+## Editor
 * New canvases are 18x24 cells by default.
 * Tabs: the top row. `=` opens the menu, `x` closes a tab, `+` adds a blank canvas.
   Opening a PNG/JPEG/BMP imports it. Dragging image files onto the window imports them too.
@@ -34,7 +46,9 @@ To make the bundles yourself, run `python3 build.py`; they are written to `dist/
   6x6 characters (3x2 per pixel, so pixels look square). At 1x the mouse can only aim at whole
   cells, so the brush paints whole cells there.
 * The size at the bottom right is a button: change the **canvas** size (crop/extend) or
-  **scale the image** (text boxes move along).
+  **scale the image** (text boxes move along). Resizing the canvas asks which corner, side or
+  the centre to keep the image at (tap a square twice, or use the arrows and Enter). Scaling asks
+  whether the canvas should fit the new size or keep its size, with the image placed at an anchor.
 * Every prompt and question on the bottom row has touch buttons (OK/Cancel, Save/Discard/Cancel...),
   so nothing gets stuck on a touch-only monitor. File prompts suggest completions (greyed out):
   Tab, Right or tapping the field accepts, Up/Down cycles.
@@ -49,6 +63,11 @@ To make the bundles yourself, run `python3 build.py`; they are written to `dist/
   common other colour, and any remaining pixels snap to whichever of those two is nearer.
 
 ## Import
+Drag image files from your computer straight onto the adpaint window (no need for `import`),
+use Import image in the menu, open them from the command line, or use `adpaint convert`.
+Files dropped while a prompt is open are imported once it closes. CC: Tweaked limits how big a
+dropped file can be (server config `upload_max_size`), so very large photos may need shrinking first.
+
 You choose the size in cells (a cell is 2x3 pixels), dithering, an **optimised**
 palette (median cut + k-means, stored in the file and applied to the monitor) or the
 **default** CC palette, and how many **colours** (2-16) the image may use. With fewer

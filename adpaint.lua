@@ -1,9 +1,5 @@
 -- adpaint: image editor for .adi advertisement images (CC: Tweaked).
---
--- Usage: adpaint [file ...] [-m <monitor side> [-s <text scale>]]
---   No files opens a blank canvas. PNG/JPEG/BMP files are imported.
---   Drag & drop image files onto the computer window to import them.
---   -m paints on an advanced monitor (touch) while you type on the computer.
+-- Run "adpaint help" for usage.
 
 local progDir = fs.getDir(shell.getRunningProgram())
 package.path = "/" .. fs.combine(progDir, "?.lua") .. ";" .. package.path
@@ -13,10 +9,171 @@ local convert -- loaded on first import (keeps start-up light)
 local floor, max, min = math.floor, math.max, math.min
 local HEX = adimg.IDX_TO_HEX
 
+local USAGE = [[
+Usage:
+ adpaint [file ...]   open .adi files in tabs; PNG,
+                      JPEG and BMP files are imported
+ adpaint -m <side> [-s <scale>] [file ...]
+                      paint on an advanced monitor
+ adpaint convert <image> [out.adi] [options]
+   -w, --width <n>    width in cells (default: fit
+                      this terminal)
+       --height <n>   height (default: keep aspect)
+   -c, --colours <n>  colours to use, 2-16 (16)
+   -p, --palette <p>  optimised (default) or default
+   -n, --no-dither    don't dither
+   -f, --force        overwrite out.adi
+ adpaint setup        filename completion at boot
+ adpaint help         this text
+
+While adpaint runs, drag image files from your
+computer onto its window to import them.]]
+
+-- Files dropped onto the window while a prompt or an import was busy.
+local pendingFiles = {}
+
+-- Returns a function to call often during long work: it yields every ~2s
+-- (avoiding "too long without yielding") and keeps dropped files.
+local function yielder()
+  local last = os.epoch("utc")
+  return function()
+    if os.epoch("utc") - last > 2000 then
+      os.queueEvent("adpaint_yield")
+      while true do
+        local ev = { os.pullEventRaw() }
+        if ev[1] == "adpaint_yield" then break
+        elseif ev[1] == "file_transfer" then pendingFiles[#pendingFiles + 1] = ev[2]
+        elseif ev[1] == "terminate" then error("Terminated", 0) end
+      end
+      last = os.epoch("utc")
+    end
+  end
+end
+
+---------------------------------------------------------------------------
+-- Shell integration: argument completion, "setup", "convert"
+---------------------------------------------------------------------------
+local NUMBER_OPTS = { ["-w"] = true, ["--width"] = true, ["--height"] = true, ["-c"] = true,
+                      ["--colours"] = true, ["--colors"] = true, ["-s"] = true }
+local CONVERT_OPTS = { "--width", "--height", "--colours", "--palette", "--no-dither", "--force" }
+
+local function completeArgs(sh, index, text, previous)
+  local ok, c = pcall(require, "cc.shell.completion")
+  if not ok then return {} end
+  local prev = previous[#previous]
+  if NUMBER_OPTS[prev] then return {} end
+  if prev == "-m" then return c.peripheral(sh, text, previous, true) end
+  if prev == "-p" or prev == "--palette" then
+    return c.choice(sh, text, previous, { "optimised", "default" }, true)
+  end
+  local isConvert = previous[2] == "convert"
+  if text:sub(1, 1) == "-" then
+    return c.choice(sh, text, previous, isConvert and CONVERT_OPTS or { "-m", "-s" }, true)
+  end
+  local out = {}
+  if index == 1 then
+    for _, v in ipairs(c.choice(sh, text, previous, { "help", "convert", "setup" }, true)) do out[#out + 1] = v end
+  end
+  for _, v in ipairs(c.dirOrFile(sh, text, previous, true)) do out[#out + 1] = v end
+  return out
+end
+
+if shell.setCompletionFunction then
+  shell.setCompletionFunction(shell.getRunningProgram(), completeArgs)
+end
+
+local SETUP_MARK = "-- adpaint: filename completion"
+
+local function setup()
+  local line = ("shell.run(%q, \"--register\") %s"):format("/" .. shell.getRunningProgram(), SETUP_MARK)
+  local target
+  for _, f in ipairs({ "/startup.lua", "/startup" }) do
+    if fs.exists(f) and not fs.isDir(f) then target = f; break end
+  end
+  if target then
+    local h = fs.open(target, "r")
+    local content = h.readAll() or ""
+    h.close()
+    if content:find(SETUP_MARK, 1, true) then print("Already set up in " .. target); return end
+    h = fs.open(target, "a")
+    h.write((content:sub(-1) == "\n" or content == "") and line .. "\n" or "\n" .. line .. "\n")
+    h.close()
+  else
+    target = "/startup/adpaint.lua"
+    local h = fs.open(target, "w")
+    h.write(line .. "\n")
+    h.close()
+  end
+  print("Added completion to " .. target .. ".")
+  print("It is active now and after every reboot.")
+end
+
+local function cliConvert(argv)
+  local opt = { colours = 16, optimise = true, dither = true }
+  local input, output, force
+  local i = 1
+  while i <= #argv do
+    local a = argv[i]
+    local v = argv[i + 1]
+    if a == "-w" or a == "--width" then opt.w = tonumber(v); i = i + 2
+    elseif a == "--height" then opt.h = tonumber(v); i = i + 2
+    elseif a == "-c" or a == "--colours" or a == "--colors" then opt.colours = tonumber(v) or 16; i = i + 2
+    elseif a == "-p" or a == "--palette" then opt.optimise = (v or ""):sub(1, 1):lower() ~= "d"; i = i + 2
+    elseif a == "-n" or a == "--no-dither" then opt.dither = false; i = i + 1
+    elseif a == "-f" or a == "--force" then force = true; i = i + 1
+    elseif a:sub(1, 1) == "-" then printError("Unknown option " .. a); return
+    elseif not input then input = a; i = i + 1
+    elseif not output then output = a; i = i + 1
+    else printError("Too many arguments"); return end
+  end
+  if not input then print(USAGE); return end
+  local inPath = shell.resolve(input)
+  if not fs.exists(inPath) or fs.isDir(inPath) then printError("No such file: " .. input); return end
+  output = output and shell.resolve(output) or (inPath:gsub("%.[^%./]*$", "") .. ".adi")
+  if fs.exists(output) and not force then
+    write(fs.getName(output) .. " exists. Overwrite? (y/n) ")
+    local r = read()
+    if not r or r:lower():sub(1, 1) ~= "y" then return end
+  end
+  local h = fs.open(inPath, "rb")
+  local data = h.readAll() or ""
+  h.close()
+  convert = require("lib.convert")
+  local info, err = convert.info(data)
+  if not info then printError(input .. ": " .. tostring(err)); return end
+  for _, k in ipairs({ "w", "h" }) do
+    if opt[k] then opt[k] = math.max(1, math.min(512, math.floor(opt[k]))) end
+  end
+  if not opt.w and not opt.h then
+    local tw, th = term.getSize()
+    opt.w, opt.h = convert.fitCells(info, tw, th)
+  elseif opt.h and not opt.w then
+    opt.w = math.max(1, math.floor(opt.h * 3 * info.dw / info.dh / 2 + 0.5))
+  end
+  opt.colours = math.max(2, math.min(16, math.floor(opt.colours)))
+  opt.yield = yielder()
+  opt.status = print
+  local ok, img, ierr = pcall(convert.import, data, opt)
+  if not ok then ierr = img; img = nil end
+  if not img then printError("Conversion failed: " .. tostring(ierr)); return end
+  local sok, serr = adimg.save(img, output)
+  if not sok then printError("Save failed: " .. tostring(serr)); return end
+  print(("Saved %s (%dx%d cells)"):format(output, img.w, img.h))
+end
+
 ---------------------------------------------------------------------------
 -- Arguments / display set-up
 ---------------------------------------------------------------------------
 local args = { ... }
+local command = args[1]
+if command == "--register" then return end
+if command == "help" or command == "-h" or command == "--help" or command == "-?" then
+  textutils.pagedPrint(USAGE)
+  return
+end
+if command == "setup" then setup(); return end
+if command == "convert" then cliConvert({ table.unpack(args, 2) }); return end
+
 local files, monSide, monScale = {}, nil, 0.5
 do
   local i = 1
@@ -908,6 +1065,7 @@ local function prompt(label, default, complete)
       end
       if k ~= keys.up and k ~= keys.down then recomplete() end
     elseif e == "key_up" then trackModifiers(ev)
+    elseif e == "file_transfer" then pendingFiles[#pendingFiles + 1] = ev[2]
     elseif e == "term_resize" or e == "monitor_resize" then onResize()
     end
   end
@@ -943,8 +1101,79 @@ local function choose(question, options)
         if name and #name == 1 and o[1]:sub(1, 1):lower() == name then return o[2] end
       end
     elseif ev[1] == "key_up" then trackModifiers(ev)
+    elseif ev[1] == "file_transfer" then pendingFiles[#pendingFiles + 1] = ev[2]
     elseif ev[1] == "term_resize" or ev[1] == "monitor_resize" then onResize()
     end
+  end
+end
+
+-- Picks one of 9 anchor points (corners, sides, centre) on a touchable
+-- 3x3 grid. Returns ax, ay in {0, 0.5, 1}, or nil if cancelled.
+local ANCHOR_NAMES = { "top left", "top", "top right", "left", "centre", "right",
+                       "bottom left", "bottom", "bottom right" }
+local function chooseAnchor(title)
+  local pick = 1
+  while true do
+    local hits, cells = nil, {}
+    draw(function()
+      local bw, bh = 5, viewH() >= 15 and 3 or 1
+      local pw, ph = 3 * bw + 2 + 4, 3 * bh + 2 + 4
+      local x0 = max(1, floor((W - pw) / 2) + 1)
+      local y0 = max(2, floor((viewH() - ph) / 2) + 2)
+      win.setBackgroundColour(2 ^ ui.bar)
+      for y = y0, min(H - 2, y0 + ph - 1) do
+        win.setCursorPos(x0, y); win.write(string.rep(" ", pw))
+      end
+      win.setCursorPos(x0 + 2, y0 + 1)
+      win.setTextColour(2 ^ ui.text)
+      win.write(title:sub(1, pw - 4))
+      for i = 1, 9 do
+        local gx = x0 + 2 + ((i - 1) % 3) * (bw + 1)
+        local gy = y0 + 3 + floor((i - 1) / 3) * (bh + 1)
+        local c = i == pick and ui.hi or ui.dark
+        for y = gy, gy + bh - 1 do
+          if y <= H - 2 then blitAt(gx, y, string.rep(" ", bw), ui.text, c) end
+        end
+        cells[i] = { gx, gy, gx + bw - 1, gy + bh - 1 }
+      end
+      win.setCursorPos(1, H)
+      win.setBackgroundColour(2 ^ ui.accent); win.setTextColour(2 ^ ui.text)
+      win.clearLine()
+      local free
+      hits, free = bottomButtons({ { "OK", "ok" }, { "Cancel", "cancel" } })
+      win.setCursorPos(1, H)
+      win.setBackgroundColour(2 ^ ui.accent)
+      win.write(("Anchor: " .. ANCHOR_NAMES[pick]):sub(1, max(0, free)))
+    end)
+    local ev = { os.pullEventRaw() }
+    local button, x, y = asClick(ev)
+    local done = false
+    if ev[1] == "terminate" then return nil
+    elseif button then
+      if y == H then
+        local r = hitButton(hits, x)
+        if r == "ok" then done = true elseif r == "cancel" then return nil end
+      else
+        for i, c in ipairs(cells) do
+          if x >= c[1] and x <= c[3] and y >= c[2] and y <= c[4] then
+            if i == pick then done = true end -- tapping the chosen one again confirms
+            pick = i
+          end
+        end
+      end
+    elseif ev[1] == "key" then
+      trackModifiers(ev)
+      local k = ev[2]
+      if k == keys.enter or k == keys.numPadEnter then done = true
+      elseif k == keys.left and (pick - 1) % 3 > 0 then pick = pick - 1
+      elseif k == keys.right and (pick - 1) % 3 < 2 then pick = pick + 1
+      elseif k == keys.up and pick > 3 then pick = pick - 3
+      elseif k == keys.down and pick < 7 then pick = pick + 3 end
+    elseif ev[1] == "key_up" then trackModifiers(ev)
+    elseif ev[1] == "file_transfer" then pendingFiles[#pendingFiles + 1] = ev[2]
+    elseif ev[1] == "term_resize" or ev[1] == "monitor_resize" then onResize()
+    end
+    if done then return ((pick - 1) % 3) / 2, floor((pick - 1) / 3) / 2 end
   end
 end
 
@@ -969,17 +1198,6 @@ local function message(lines)
   until e == "terminate" or e == "key" or e == "mouse_click" or e == "monitor_touch"
 end
 
-local function yielder()
-  local last = os.epoch("utc")
-  return function()
-    local now = os.epoch("utc")
-    if now - last > 2000 then
-      os.queueEvent("adpaint_yield")
-      os.pullEvent("adpaint_yield")
-      last = os.epoch("utc")
-    end
-  end
-end
 
 local function busy(msg)
   setStatus(msg, 60)
@@ -1114,33 +1332,61 @@ local function quit()
   end
 end
 
+-- Copies src's pixels into a new w x h canvas filled with `fill`, with the
+-- source's top-left at cell offset (ox, oy). Returns the pixel array.
+local function placePixels(src, w, h, ox, oy, fill)
+  local new = adimg.new(w, h, fill)
+  for y = 0, new.ph - 1 do
+    local sy = y - oy * 3
+    if sy >= 0 and sy < src.ph then
+      for x = 0, new.pw - 1 do
+        local sx = x - ox * 2
+        if sx >= 0 and sx < src.pw then new.px[y * new.pw + x + 1] = src.px[sy * src.pw + sx + 1] end
+      end
+    end
+  end
+  return new
+end
+
+-- Cell offset that puts a `size` wide thing at anchor `a` (0/0.5/1) in `space`.
+local function anchorOffset(space, size, a)
+  return floor((space - size) * a + 0.5)
+end
+
+local function moveText(text, dx, dy, w, h)
+  for _, b in ipairs(text) do
+    b.x = max(1, min(w, b.x + dx))
+    b.y = max(1, min(h, b.y + dy))
+  end
+end
+
 local function resizeCanvas()
   local d = doc()
   local r = prompt("Canvas width (cells): ", tostring(d.img.w))
   if not r then return end
-  local nw = max(1, min(512, tonumber(r) or d.img.w))
+  local nw = max(1, min(512, floor(tonumber(r) or d.img.w)))
   r = prompt("Canvas height (cells): ", tostring(d.img.h))
   if not r then return end
-  local nh = max(1, min(512, tonumber(r) or d.img.h))
+  local nh = max(1, min(512, floor(tonumber(r) or d.img.h)))
   if nw == d.img.w and nh == d.img.h then return end
+  local ax, ay = chooseAnchor("Keep image at:")
+  if not ax then return end
   deselect()
   beginOp("full")
   local old = d.img
-  local new = adimg.new(nw, nh, secondary)
-  for y = 0, min(old.ph, new.ph) - 1 do
-    for x = 0, min(old.pw, new.pw) - 1 do
-      new.px[y * new.pw + x + 1] = old.px[y * old.pw + x + 1]
-    end
-  end
-  old.px, old.w, old.h, old.pw, old.ph = new.px, nw, nh, new.pw, new.ph
-  old.text = adimg.copyText(old.text)
+  local ox, oy = anchorOffset(nw, old.w, ax), anchorOffset(nh, old.h, ay)
+  local new = placePixels(old, nw, nh, ox, oy, secondary)
+  local text = adimg.copyText(old.text)
+  moveText(text, ox, oy, nw, nh)
+  old.px, old.w, old.h, old.pw, old.ph, old.text = new.px, nw, nh, new.pw, new.ph, text
   endOp()
   clampView(d)
-  setStatus(("Resized to %dx%d"):format(nw, nh))
+  setStatus(("Canvas is now %dx%d"):format(nw, nh))
 end
 
 -- Scales the image (nearest neighbour), then makes every cell 2-colour
--- again. Text boxes keep their relative position.
+-- again. The canvas either follows the new size, or keeps its size with the
+-- scaled image placed at a chosen anchor. Text boxes move along.
 local function scaleImage()
   local d = doc()
   local img = d.img
@@ -1151,6 +1397,13 @@ local function scaleImage()
   if not r then return end
   local nh = max(1, min(512, floor(tonumber(r) or img.h)))
   if nw == img.w and nh == img.h then return end
+  local mode = choose("Canvas:", { { "Fit image", "fit" }, { "Keep size", "keep" }, { "Cancel", "c" } })
+  if mode ~= "fit" and mode ~= "keep" then return end
+  local ax, ay = 0, 0
+  if mode == "keep" then
+    ax, ay = chooseAnchor("Place image at:")
+    if not ax then return end
+  end
   deselect()
   beginOp("full")
   local new = adimg.new(nw, nh, 0)
@@ -1173,10 +1426,17 @@ local function scaleImage()
     b.x = max(1, min(nw, floor((b.x - 1) * nw / img.w + 0.5) + 1))
     b.y = max(1, min(nh, floor((b.y - 1) * nh / img.h + 0.5) + 1))
   end
-  img.px, img.w, img.h, img.pw, img.ph, img.text = new.px, nw, nh, new.pw, new.ph, text
+  local cw, ch = nw, nh
+  if mode == "keep" then
+    cw, ch = img.w, img.h
+    local ox, oy = anchorOffset(cw, nw, ax), anchorOffset(ch, nh, ay)
+    new = placePixels(new, cw, ch, ox, oy, secondary)
+    moveText(text, ox, oy, cw, ch)
+  end
+  img.px, img.w, img.h, img.pw, img.ph, img.text = new.px, cw, ch, new.pw, new.ph, text
   endOp()
   clampView(d)
-  setStatus(("Scaled to %dx%d"):format(nw, nh))
+  setStatus(("Image scaled to %dx%d"):format(nw, nh))
 end
 
 local function sizeMenu()
@@ -1221,6 +1481,7 @@ local HELP = {
   "Text tool: click to add/select a box, type to edit,",
   "drag to move. Palette L/R = text / background.",
   "Click the size (bottom right) to resize or scale.",
+  "Run 'adpaint help' in the shell for command usage.",
   "",
   "Press any key.",
 }
@@ -1425,7 +1686,10 @@ end
 ---------------------------------------------------------------------------
 local function main()
   for _, f in ipairs(files) do openPath(f) end
-  if #docs == 0 then addDoc(blankDoc()) end
+  if #docs == 0 then
+    addDoc(blankDoc())
+    setStatus("Tip: drop image files here to import", 6)
+  end
   cur = 1
   applyPalette()
   clampView(doc())
@@ -1452,6 +1716,7 @@ local function main()
     elseif e == "file_transfer" then handleFiles(ev[2])
     elseif e == "term_resize" or e == "monitor_resize" then onResize()
     end
+    while #pendingFiles > 0 do handleFiles(table.remove(pendingFiles, 1)) end
   end
 end
 
