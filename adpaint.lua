@@ -105,9 +105,33 @@ local function computeUi()
   ui.void = nearest(0x262626)
 end
 
+-- A tab's first L/R colours: the darkest and the brightest palette colour
+-- (black / white with the default palette).
+local function resetColours()
+  local pal = palette()
+  local dl, bl = math.huge, -1
+  for i = 0, 15 do
+    local r, g, b = adimg.rgb(pal[i])
+    local l = r * 0.3 + g * 0.59 + b * 0.11
+    if l < dl then primary, dl = i, l end
+    if l > bl then secondary, bl = i, l end
+  end
+end
+
+-- Every tab remembers its own L/R colours. `colourDoc` is the tab whose
+-- colours are currently loaded into primary/secondary.
+local colourDoc = nil
+
+-- Called whenever the current tab (or its palette) changes.
 local function applyPalette()
   adimg.applyPalette(win, palette())
   computeUi()
+  local d = doc()
+  if d ~= colourDoc then
+    if colourDoc then colourDoc.primary, colourDoc.secondary = primary, secondary end
+    colourDoc = d
+    if d.primary then primary, secondary = d.primary, d.secondary else resetColours() end
+  end
 end
 
 ---------------------------------------------------------------------------
@@ -134,23 +158,6 @@ local function blankDoc(w, h)
   return newDoc(adimg.new(w or W, h or viewH(), 0))
 end
 
--- New images start with the darkest colour on L and the brightest on R
--- (black / white for the default palette).
-local function resetColours()
-  local pal = palette()
-  local dl, bl = math.huge, -1
-  for i = 0, 15 do
-    local r, g, b = adimg.rgb(pal[i])
-    local l = r * 0.3 + g * 0.59 + b * 0.11
-    if l < dl then primary, dl = i, l end
-    if l > bl then secondary, bl = i, l end
-  end
-end
-
-local function addNewDoc(d)
-  addDoc(d)
-  resetColours()
-end
 
 ---------------------------------------------------------------------------
 -- Undo / redo (operations swap old <-> current state, so applying an op
@@ -646,7 +653,7 @@ end
 local function drawPalette()
   local y = H - 1
   win.setCursorPos(1, y)
-  win.setBackgroundColour(2 ^ ui.dark); win.clearLine()
+  win.setBackgroundColour(2 ^ ui.bar); win.clearLine()
   local sw = W >= 40 and 2 or 1
   for c = 0, 15 do
     local mark = " "
@@ -665,7 +672,7 @@ local function drawPalette()
   local size = " " .. d.img.w .. "x" .. d.img.h .. " "
   local sx = W - #size + 1
   if sx > x then
-    blitAt(sx, y, size, ui.text, ui.bar)
+    blitAt(sx, y, size, ui.text, ui.dark)
     sizeHit = { sx, W }
   else
     sizeHit = nil
@@ -808,11 +815,23 @@ local function hitButton(hits, x)
 end
 
 -- Text input. Returns the entered string, or nil when cancelled.
+-- `complete(text)` may return a list of suffixes (like read()'s completion):
+-- the current one is shown greyed out after the text. Tab (or tapping the
+-- suggestion) accepts it, Up/Down cycle through the alternatives.
 local function prompt(label, default, complete)
   local text = tostring(default or "")
   local pos = #text
+  local comps, ci = nil, 1
+  local function recomplete()
+    comps, ci = nil, 1
+    if complete and pos == #text then
+      local ok, c = pcall(complete, text)
+      if ok and type(c) == "table" and #c > 0 then comps = c end
+    end
+  end
+  recomplete()
   while true do
-    local hits
+    local hits, fieldX, fieldEnd
     draw(function()
       win.setCursorPos(1, H)
       win.setBackgroundColour(2 ^ ui.accent); win.setTextColour(2 ^ ui.text)
@@ -828,6 +847,14 @@ local function prompt(label, default, complete)
       local scroll = max(0, pos - fw + 1)
       win.setBackgroundColour(2 ^ ui.dark)
       win.write((text:sub(scroll + 1, scroll + fw) .. string.rep(" ", fw)):sub(1, fw))
+      if comps then
+        local gx = fx + #text - scroll
+        local ghost = comps[ci]:sub(1, max(0, fx + fw - gx))
+        win.setCursorPos(gx, H)
+        win.setTextColour(2 ^ ui.dim)
+        win.write(ghost)
+      end
+      fieldX, fieldEnd = fx, fx + fw - 1
       win.setCursorPos(fx + pos - scroll, H)
       win.setTextColour(2 ^ ui.text)
       win.setCursorBlink(true)
@@ -838,10 +865,14 @@ local function prompt(label, default, complete)
     if e == "terminate" then return nil
     elseif button and y == H then
       local r = hitButton(hits, x)
-      if r == "ok" then return text elseif r == "cancel" then return nil end
+      if r == "ok" then return text elseif r == "cancel" then return nil
+      elseif comps and x >= fieldX and x <= fieldEnd then
+        text = text .. comps[ci]; pos = #text; recomplete()
+      end
     elseif e == "char" or e == "paste" then
       text = text:sub(1, pos) .. ev[2] .. text:sub(pos + 1)
       pos = pos + #ev[2]
+      recomplete()
     elseif e == "key" then
       trackModifiers(ev)
       local k = ev[2]
@@ -850,13 +881,16 @@ local function prompt(label, default, complete)
         text = text:sub(1, pos - 1) .. text:sub(pos + 1); pos = pos - 1
       elseif k == keys.delete then text = text:sub(1, pos) .. text:sub(pos + 2)
       elseif k == keys.left then pos = max(0, pos - 1)
+      elseif k == keys.right and comps and pos == #text then
+        text = text .. comps[ci]; pos = #text
       elseif k == keys.right then pos = min(#text, pos + 1)
       elseif k == keys.home then pos = 0
       elseif k == keys["end"] then pos = #text
-      elseif k == keys.tab and complete and pos == #text then
-        local c = complete(text)
-        if c and c[1] then text = text .. c[1]; pos = #text end
+      elseif k == keys.tab and comps then text = text .. comps[ci]; pos = #text
+      elseif k == keys.up and comps then ci = (ci - 2) % #comps + 1
+      elseif k == keys.down and comps then ci = ci % #comps + 1
       end
+      if k ~= keys.up and k ~= keys.down then recomplete() end
     elseif e == "key_up" then trackModifiers(ev)
     elseif e == "term_resize" or e == "monitor_resize" then onResize()
     end
@@ -986,7 +1020,7 @@ local function importData(name, data)
   local base = fs.getName(name):gsub("%.[^%.]*$", "")
   local d = newDoc(img, shell.resolve(base .. ".adi"))
   d.dirty = true
-  addNewDoc(d)
+  addDoc(d)
   setStatus("Imported " .. fs.getName(name))
   return d
 end
@@ -1000,7 +1034,7 @@ local function openPath(path)
     -- a new file: blank canvas that will be saved under this name
     local d = blankDoc()
     d.path = path
-    addNewDoc(d)
+    addDoc(d)
     setStatus("New file " .. fs.getName(path))
     return d
   end
@@ -1049,7 +1083,7 @@ local function closeDoc(i)
   table.remove(docs, i)
   if #docs == 0 then
     if not running then return true end
-    addNewDoc(blankDoc())
+    addDoc(blankDoc())
   end
   cur = min(cur, #docs)
   if i < cur then cur = cur - 1 end
@@ -1179,7 +1213,7 @@ menuItems = {
   { "New", "^N", function() local r = prompt("Size WxH: ", W .. "x" .. viewH())
       if not r then return end
       local w, h = r:match("(%d+)%s*[xX, ]%s*(%d+)")
-      addNewDoc(blankDoc(max(1, min(512, tonumber(w) or W)), max(1, min(512, tonumber(h) or viewH())))) end },
+      addDoc(blankDoc(max(1, min(512, tonumber(w) or W)), max(1, min(512, tonumber(h) or viewH())))) end },
   { "Open...", "^O", function() local r = prompt("Open: ", "", completePath); if r and r ~= "" then openPath(r) end end },
   { "Save", "^S", function() saveDoc() end },
   { "Save as...", "", function() saveDoc(nil, true) end },
@@ -1294,7 +1328,7 @@ local function click(button, x, y)
       if x >= t[1] and x <= t[2] then deselect(); cur = t[3]; applyPalette(); return end
       if x == t[4] then closeDoc(t[3]); return end
     end
-    if x == tabHits.plus then addNewDoc(blankDoc()) end
+    if x == tabHits.plus then addDoc(blankDoc()) end
   elseif y == H - 1 then
     if sizeHit and x >= sizeHit[1] and x <= sizeHit[2] then sizeMenu(); return end
     local sw = W >= 40 and 2 or 1
@@ -1375,7 +1409,7 @@ end
 ---------------------------------------------------------------------------
 local function main()
   for _, f in ipairs(files) do openPath(f) end
-  if #docs == 0 then addNewDoc(blankDoc()) end
+  if #docs == 0 then addDoc(blankDoc()) end
   cur = 1
   applyPalette()
   clampView(doc())

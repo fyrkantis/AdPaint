@@ -6,12 +6,17 @@ adview.lua         shows an .adi on a monitor (picks the largest text scale that
 lib/adimg.lua      .adi file format: load/save/compose/draw (all a player needs)
 lib/convert.lua    PNG/JPEG/BMP -> .adi (resample, palette, 2-colour quantise, dither)
 lib/png.lua  lib/inflate.lua  lib/jpeg.lua  lib/bmp.lua   decoders, pure Lua
-dist/              single-file bundles of adpaint/adview (made with build.py)
+build.py           bundles each program + its libs into dist/ (release files)
 ```
 
 ## Install
-Drag `dist/adpaint.lua` (and `dist/adview.lua`) onto the computer while it is running
-`import`, or keep the source layout (`adpaint.lua` next to a `lib/` folder).
+Download `adpaint.lua` (and `adview.lua`) from the latest
+[release](https://github.com/fyrkantis/adpaint/releases): each is a single file with the
+libraries bundled in. Drag them onto the computer while it is running `import`.
+Alternatively keep the source layout (`adpaint.lua` next to a `lib/` folder).
+
+To make the bundles yourself, run `python3 build.py`; they are written to `dist/`
+(which is not committed).
 
 ## Editor
 `adpaint [file ...] [-m <monitor side> [-s <text scale>]]`
@@ -19,7 +24,8 @@ Drag `dist/adpaint.lua` (and `dist/adview.lua`) onto the computer while it is ru
 * Tabs: the top row. `=` opens the menu, `x` closes a tab, `+` adds a blank canvas.
   Opening a PNG/JPEG/BMP imports it. Dragging image files onto the window imports them too.
 * Left click paints with the **L** colour and right click with **R**; pick both in the palette row.
-  New images start with L = darkest and R = brightest colour (black / white by default).
+  Each tab remembers its own L/R; a new tab starts with the darkest and brightest colour
+  (black / white with the default palette).
 * Tools: **Brush** (size `S-+` and dither `D-+` 1..8, 8 = solid; only shown for the brush),
   **Fill** (always solid), **Text**, **Pick**, **Pan**.
 * **Zoom** (`Z`) toggles between the real teletext view and a zoomed view where each cell is
@@ -28,7 +34,8 @@ Drag `dist/adpaint.lua` (and `dist/adview.lua`) onto the computer while it is ru
 * The size at the bottom right is a button: change the **canvas** size (crop/extend) or
   **scale the image** (text boxes move along).
 * Every prompt and question on the bottom row has touch buttons (OK/Cancel, Save/Discard/Cancel...),
-  so nothing gets stuck on a touch-only monitor.
+  so nothing gets stuck on a touch-only monitor. File prompts suggest completions (greyed out):
+  Tab, Right or tapping the field accepts, Up/Down cycles.
 * Panning: middle-drag, the arrow keys (hold Shift for bigger steps), the scroll wheel
   (hold Shift to scroll sideways), or the Pan tool.
 * Text tool: click to add a box or select one, type to edit it (Enter adds a line), drag to move it.
