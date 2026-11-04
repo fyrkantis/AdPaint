@@ -1758,7 +1758,7 @@ local function main()
   for _, f in ipairs(files) do openPath(f) end
   if #docs == 0 then
     addDoc(blankDoc())
-    setStatus("Tip: drop image files here to import", 6)
+    setStatus("Tip: drop image files here (.jpg, .png, or .bmp)", 6)
   end
   cur = 1
   applyPalette()
