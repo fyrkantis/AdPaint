@@ -59,11 +59,11 @@ local sel = nil   -- text selection {box=, line=, col=}
 local drag = nil  -- active mouse drag
 local op = nil    -- undo operation being recorded
 
--- Zoom levels: chars per pixel (zw x zh). Level 1 is native teletext.
+-- Zoom levels: chars per pixel (zw x zh). Level 1 is native teletext,
+-- level 2 turns each cell into 6x6 chars (3x2 chars per pixel = square).
 local ZOOMS = {
   { name = "1x" },
-  { name = "4x", zw = 2, zh = 2 }, -- a cell becomes 4x6 chars
-  { name = "6x", zw = 3, zh = 2 }, -- a cell becomes 6x6 chars (square pixels)
+  { name = "6x", zw = 3, zh = 2 },
 }
 
 local BAYER = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 }
@@ -131,7 +131,25 @@ local function addDoc(d)
 end
 
 local function blankDoc(w, h)
-  return newDoc(adimg.new(w or W, h or viewH(), secondary))
+  return newDoc(adimg.new(w or W, h or viewH(), 0))
+end
+
+-- New images start with the darkest colour on L and the brightest on R
+-- (black / white for the default palette).
+local function resetColours()
+  local pal = palette()
+  local dl, bl = math.huge, -1
+  for i = 0, 15 do
+    local r, g, b = adimg.rgb(pal[i])
+    local l = r * 0.3 + g * 0.59 + b * 0.11
+    if l < dl then primary, dl = i, l end
+    if l > bl then secondary, bl = i, l end
+  end
+end
+
+local function addNewDoc(d)
+  addDoc(d)
+  resetColours()
 end
 
 ---------------------------------------------------------------------------
@@ -289,7 +307,7 @@ local function floodFill(x, y, color)
   local pw, ph, px = img.pw, img.ph, img.px
   local start = y * pw + x
   local target = px[start + 1]
-  if target == color and dither == 8 then return end
+  if target == color then return end
   local seen, stack, region = { [start] = true }, { start }, {}
   while #stack > 0 do
     local p = stack[#stack]; stack[#stack] = nil
@@ -306,10 +324,8 @@ local function floodFill(x, y, color)
   local touched = {}
   for _, p in ipairs(region) do
     local qx, qy = p % pw, floor(p / pw)
-    if ditherOn(qx, qy) then
-      setPx(img, p + 1, color)
-      touched[floor(qy / 3) * img.w + floor(qx / 2)] = true
-    end
+    setPx(img, p + 1, color)
+    touched[floor(qy / 3) * img.w + floor(qx / 2)] = true
   end
   for k in pairs(touched) do fixCell(img, k % img.w, floor(k / img.w), color) end
 end
@@ -559,6 +575,35 @@ local function drawCanvas()
       end
       rows[row] = { t, f, b }
     end
+    -- thin frame around each text box (selected box highlighted), drawn
+    -- with drawing characters on the box's outermost screen characters
+    if showText then
+      for _, bx in ipairs(img.text) do
+        local fc = HEX[(sel and sel.box == bx) and ui.hi or ui.dim]
+        local c0 = ((bx.x - 1) * 2 - d.vx) * zw
+        local c1 = ((bx.x - 1 + boxWidth(bx)) * 2 - d.vx) * zw - 1
+        local r0 = ((bx.y - 1) * 3 - d.vy) * zh
+        local r1 = ((bx.y - 1 + #bx.lines) * 3 - d.vy) * zh - 1
+        for row = max(0, r0), min(vh - 1, r1) do
+          local r = rows[row]
+          local T, B = row == r0, row == r1
+          for col = max(0, c0), min(W - 1, c1) do
+            local L, R = col == c0, col == c1
+            if (L or R or T or B) and r[1][col + 1] == " " then
+              local m = ((L or T) and 1 or 0) + ((R or T) and 2 or 0) + (L and 4 or 0)
+                + (R and 8 or 0) + ((L or B) and 16 or 0) + ((R or B) and 32 or 0)
+              local pix = r[3][col + 1]
+              local f = fc == pix and HEX[ui.text] or fc
+              if m >= 32 then -- bottom-right sub-pixel is always background
+                r[1][col + 1] = CHARS[63 - m]; r[2][col + 1] = pix; r[3][col + 1] = f
+              else
+                r[1][col + 1] = CHARS[m]; r[2][col + 1] = f
+              end
+            end
+          end
+        end
+      end
+    end
     -- letters: one character in the middle of each text cell
     for k, tm in pairs(tmap) do
       local cx, cy = k % img.w, floor(k / img.w)
@@ -577,7 +622,7 @@ local function drawCanvas()
   end
 end
 
-local tabHits, toolHits = {}, {}
+local tabHits, toolHits, sizeHit = {}, {}, nil
 
 local function drawTabs()
   win.setCursorPos(1, 1)
@@ -616,15 +661,22 @@ local function drawPalette()
     blitAt(1 + c * sw, y, (mark .. "  "):sub(1, sw), fg, c)
   end
   local x = 16 * sw + 2
-  local info
-  if status and os.clock() < statusUntil then info = status
+  local d = doc()
+  local size = " " .. d.img.w .. "x" .. d.img.h .. " "
+  local sx = W - #size + 1
+  if sx > x then
+    blitAt(sx, y, size, ui.text, ui.bar)
+    sizeHit = { sx, W }
   else
-    local d = doc()
-    info = ("%dx%d %s"):format(d.img.w, d.img.h, zoomInfo(d).name)
+    sizeHit = nil
   end
-  win.setCursorPos(x, y)
-  win.setTextColour(2 ^ ui.text)
-  win.write(info:sub(1, max(0, W - x + 1)))
+end
+
+-- Status messages show as a small toast at the bottom right of the canvas.
+local function drawStatus()
+  if not (status and os.clock() < statusUntil) then return end
+  local msg = " " .. status:sub(1, W - 2) .. " "
+  blitAt(W - #msg + 1, H - 2, msg, ui.text, ui.bar)
 end
 
 local function drawToolbar()
@@ -644,6 +696,7 @@ local function drawToolbar()
     btn("No bg", function() sel.box.bg = nil; textChanged() end, sel.box.bg == nil)
     btn("Delete", deleteSelectedBox)
     btn("Done", deselect)
+    btn("Zoom", function() setZoom(doc().zoom % #ZOOMS + 1) end, doc().zoom > 1)
     btn(showText and "Txt" or "txt", function() showText = not showText end, showText)
     return
   end
@@ -658,11 +711,13 @@ local function drawToolbar()
     btn(tostring(val), function() end); x = x - 1
     btn("+", inc)
   end
-  stepper("S", brushSize, function() brushSize = max(1, brushSize - 1) end,
-    function() brushSize = min(16, brushSize + 1) end)
-  stepper("D", dither, function() dither = max(1, dither - 1) end,
-    function() dither = min(8, dither + 1) end)
-  btn("Z" .. zoomInfo(doc()).name, function() setZoom(doc().zoom % #ZOOMS + 1) end)
+  if tool == "brush" then
+    stepper("S", brushSize, function() brushSize = max(1, brushSize - 1) end,
+      function() brushSize = min(16, brushSize + 1) end)
+    stepper("D", dither, function() dither = max(1, dither - 1) end,
+      function() dither = min(8, dither + 1) end)
+  end
+  btn("Zoom", function() setZoom(doc().zoom % #ZOOMS + 1) end, doc().zoom > 1)
   btn(showText and "Txt" or "txt", function() showText = not showText end, showText)
 end
 
@@ -677,12 +732,13 @@ local function drawMenu()
   menuItems.width = w
 end
 
-local function draw()
+local function draw(overlay)
   win.setVisible(false)
   drawCanvas()
   drawTabs()
   drawPalette()
   drawToolbar()
+  drawStatus()
   if menuOpen then drawMenu() end
   win.setCursorBlink(false)
   if sel and not menuOpen then
@@ -702,22 +758,144 @@ local function draw()
       win.setCursorBlink(true)
     end
   end
+  if overlay then overlay() end
   win.setVisible(true)
 end
 
 ---------------------------------------------------------------------------
 -- Prompts
 ---------------------------------------------------------------------------
+-- Both prompt types live on the bottom row and have touch buttons, so they
+-- can always be answered or cancelled from a monitor.
+
+local function onResize()
+  W, H = display.getSize()
+  win.reposition(1, 1, W, H)
+  for _, d in ipairs(docs) do clampView(d) end
+end
+
+-- Returns button, x, y if the event is a click/touch meant for us.
+local function asClick(ev)
+  if ev[1] == "mouse_click" and not monSide then return ev[2], ev[3], ev[4] end
+  if ev[1] == "monitor_touch" and monSide and ev[2] == peripheral.getName(display) then
+    return 1, ev[3], ev[4]
+  end
+end
+
+-- Tracks modifier keys for events consumed inside modal prompts.
+local function trackModifiers(ev)
+  local k = ev[2]
+  if k == keys.leftCtrl or k == keys.rightCtrl then ctrl = ev[1] == "key" end
+  if k == keys.leftShift or k == keys.rightShift then shift = ev[1] == "key" end
+end
+
+-- Draws buttons right-aligned on the bottom row; returns hit boxes and the
+-- last column left free for other content.
+local function bottomButtons(buttons)
+  local hits, x = {}, W + 1
+  for i = #buttons, 1, -1 do
+    local label = " " .. buttons[i][1] .. " "
+    x = x - #label
+    blitAt(x, H, label, ui.text, ui.bar)
+    hits[#hits + 1] = { x, x + #label - 1, buttons[i][2] }
+    x = x - 1
+  end
+  return hits, x - 1
+end
+
+local function hitButton(hits, x)
+  for _, h in ipairs(hits) do if x >= h[1] and x <= h[2] then return h[3] end end
+end
+
+-- Text input. Returns the entered string, or nil when cancelled.
 local function prompt(label, default, complete)
-  draw()
-  win.setCursorPos(1, H)
-  win.setBackgroundColour(2 ^ ui.accent); win.setTextColour(2 ^ ui.text)
-  win.clearLine()
-  win.write(label)
-  local ok, res = pcall(read, nil, nil, complete, default)
-  win.setCursorBlink(false)
-  if not ok or res == nil then return nil end
-  return res
+  local text = tostring(default or "")
+  local pos = #text
+  while true do
+    local hits
+    draw(function()
+      win.setCursorPos(1, H)
+      win.setBackgroundColour(2 ^ ui.accent); win.setTextColour(2 ^ ui.text)
+      win.clearLine()
+      local free
+      hits, free = bottomButtons({ { "OK", "ok" }, { "Cancel", "cancel" } })
+      local lab = label:sub(1, max(0, free - 8))
+      win.setCursorPos(1, H)
+      win.setBackgroundColour(2 ^ ui.accent)
+      win.write(lab)
+      local fx = #lab + 1
+      local fw = max(1, free - fx + 1)
+      local scroll = max(0, pos - fw + 1)
+      win.setBackgroundColour(2 ^ ui.dark)
+      win.write((text:sub(scroll + 1, scroll + fw) .. string.rep(" ", fw)):sub(1, fw))
+      win.setCursorPos(fx + pos - scroll, H)
+      win.setTextColour(2 ^ ui.text)
+      win.setCursorBlink(true)
+    end)
+    local ev = { os.pullEventRaw() }
+    local e = ev[1]
+    local button, x, y = asClick(ev)
+    if e == "terminate" then return nil
+    elseif button and y == H then
+      local r = hitButton(hits, x)
+      if r == "ok" then return text elseif r == "cancel" then return nil end
+    elseif e == "char" or e == "paste" then
+      text = text:sub(1, pos) .. ev[2] .. text:sub(pos + 1)
+      pos = pos + #ev[2]
+    elseif e == "key" then
+      trackModifiers(ev)
+      local k = ev[2]
+      if k == keys.enter or k == keys.numPadEnter then return text
+      elseif k == keys.backspace and pos > 0 then
+        text = text:sub(1, pos - 1) .. text:sub(pos + 1); pos = pos - 1
+      elseif k == keys.delete then text = text:sub(1, pos) .. text:sub(pos + 2)
+      elseif k == keys.left then pos = max(0, pos - 1)
+      elseif k == keys.right then pos = min(#text, pos + 1)
+      elseif k == keys.home then pos = 0
+      elseif k == keys["end"] then pos = #text
+      elseif k == keys.tab and complete and pos == #text then
+        local c = complete(text)
+        if c and c[1] then text = text .. c[1]; pos = #text end
+      end
+    elseif e == "key_up" then trackModifiers(ev)
+    elseif e == "term_resize" or e == "monitor_resize" then onResize()
+    end
+  end
+end
+
+-- Multiple choice with touch buttons. options = { {label, value}, ... }.
+-- A key press of an option's first letter also picks it; Enter picks the
+-- first option. Returns the value, or nil if cancelled/terminated.
+local function choose(question, options)
+  while true do
+    local hits
+    draw(function()
+      win.setCursorPos(1, H)
+      win.setBackgroundColour(2 ^ ui.accent); win.setTextColour(2 ^ ui.text)
+      win.clearLine()
+      local free
+      hits, free = bottomButtons(options)
+      win.setCursorPos(1, H)
+      win.setBackgroundColour(2 ^ ui.accent)
+      win.write(question:sub(1, max(0, free)))
+    end)
+    local ev = { os.pullEventRaw() }
+    local button, x, y = asClick(ev)
+    if ev[1] == "terminate" then return nil
+    elseif button and y == H then
+      local r = hitButton(hits, x)
+      if r ~= nil then return r end
+    elseif ev[1] == "key" then
+      trackModifiers(ev)
+      if ev[2] == keys.enter or ev[2] == keys.numPadEnter then return options[1][2] end
+      local name = keys.getName(ev[2])
+      for _, o in ipairs(options) do
+        if name and #name == 1 and o[1]:sub(1, 1):lower() == name then return o[2] end
+      end
+    elseif ev[1] == "key_up" then trackModifiers(ev)
+    elseif ev[1] == "term_resize" or ev[1] == "monitor_resize" then onResize()
+    end
+  end
 end
 
 local function completePath(text)
@@ -725,8 +903,7 @@ local function completePath(text)
 end
 
 local function confirm(question)
-  local r = prompt(question .. " (y/n) ", "")
-  return r and r:lower():sub(1, 1) == "y"
+  return choose(question, { { "Yes", true }, { "No", false } }) == true
 end
 
 local function message(lines)
@@ -790,15 +967,16 @@ local function importData(name, data)
   r = prompt("Height (cells): ", tostring(dh))
   if not r then return end
   local ch = max(1, min(512, tonumber(r) or dh))
-  r = prompt("Dither? (y/n): ", "y")
+  local dith = choose("Dithering:", { { "Dither", true }, { "None", false }, { "Cancel", "c" } })
+  if dith == nil or dith == "c" then return end
+  local opt = choose("Palette:", { { "Optimised", true }, { "Default", false }, { "Cancel", "c" } })
+  if opt == nil or opt == "c" then return end
+  r = prompt("Colours to use (2-16): ", "16")
   if not r then return end
-  local dith = r:lower():sub(1, 1) ~= "n"
-  r = prompt("Palette: (o)ptimised / (d)efault CC: ", "o")
-  if not r then return end
-  local opt = r:lower():sub(1, 1) ~= "d"
+  local ncol = max(2, min(16, floor(tonumber(r) or 16)))
   busy("Importing...")
   local ok, img, ierr = pcall(convert.import, data, {
-    w = cw, h = ch, dither = dith, optimise = opt,
+    w = cw, h = ch, dither = dith, optimise = opt, colours = ncol,
     background = palette()[secondary],
     yield = yielder(),
     status = function(m) busy(m) end,
@@ -808,7 +986,7 @@ local function importData(name, data)
   local base = fs.getName(name):gsub("%.[^%.]*$", "")
   local d = newDoc(img, shell.resolve(base .. ".adi"))
   d.dirty = true
-  addDoc(d)
+  addNewDoc(d)
   setStatus("Imported " .. fs.getName(name))
   return d
 end
@@ -822,7 +1000,7 @@ local function openPath(path)
     -- a new file: blank canvas that will be saved under this name
     local d = blankDoc()
     d.path = path
-    addDoc(d)
+    addNewDoc(d)
     setStatus("New file " .. fs.getName(path))
     return d
   end
@@ -863,16 +1041,15 @@ local function closeDoc(i)
   if i == cur then deselect() end
   if d.dirty then
     cur = i; applyPalette()
-    local r = prompt("Save changes to " .. docName(d) .. "? (y/n/c) ", "")
-    if not r then return false end
-    r = r:lower():sub(1, 1)
+    local r = choose("Save " .. docName(d) .. "?",
+      { { "Save", "y" }, { "Discard", "n" }, { "Cancel", "c" } })
     if r == "y" then if not saveDoc(d) then return false end
     elseif r ~= "n" then return false end
   end
   table.remove(docs, i)
   if #docs == 0 then
     if not running then return true end
-    addDoc(blankDoc())
+    addNewDoc(blankDoc())
   end
   cur = min(cur, #docs)
   if i < cur then cur = cur - 1 end
@@ -912,6 +1089,51 @@ local function resizeCanvas()
   setStatus(("Resized to %dx%d"):format(nw, nh))
 end
 
+-- Scales the image (nearest neighbour), then makes every cell 2-colour
+-- again. Text boxes keep their relative position.
+local function scaleImage()
+  local d = doc()
+  local img = d.img
+  local r = prompt("Image width (cells): ", tostring(img.w))
+  if not r then return end
+  local nw = max(1, min(512, floor(tonumber(r) or img.w)))
+  r = prompt("Image height (cells): ", tostring(max(1, floor(img.h * nw / img.w + 0.5))))
+  if not r then return end
+  local nh = max(1, min(512, floor(tonumber(r) or img.h)))
+  if nw == img.w and nh == img.h then return end
+  deselect()
+  beginOp("full")
+  local new = adimg.new(nw, nh, 0)
+  for y = 0, new.ph - 1 do
+    local sy = min(img.ph - 1, floor((y + 0.5) * img.ph / new.ph))
+    for x = 0, new.pw - 1 do
+      local sx = min(img.pw - 1, floor((x + 0.5) * img.pw / new.pw))
+      new.px[y * new.pw + x + 1] = img.px[sy * img.pw + sx + 1]
+    end
+  end
+  new.palette = img.palette
+  local saved = op
+  op = nil -- the full snapshot covers this; don't log pixels into it
+  for cy = 0, nh - 1 do
+    for cx = 0, nw - 1 do fixCell(new, cx, cy, nil) end
+  end
+  op = saved
+  local text = adimg.copyText(img.text)
+  for _, b in ipairs(text) do
+    b.x = max(1, min(nw, floor((b.x - 1) * nw / img.w + 0.5) + 1))
+    b.y = max(1, min(nh, floor((b.y - 1) * nh / img.h + 0.5) + 1))
+  end
+  img.px, img.w, img.h, img.pw, img.ph, img.text = new.px, nw, nh, new.pw, new.ph, text
+  endOp()
+  clampView(d)
+  setStatus(("Scaled to %dx%d"):format(nw, nh))
+end
+
+local function sizeMenu()
+  local r = choose("Change size of:", { { "Canvas", "canvas" }, { "Image", "image" }, { "Cancel", "c" } })
+  if r == "canvas" then resizeCanvas() elseif r == "image" then scaleImage() end
+end
+
 local function editColour()
   local d = doc()
   local pal = palette()
@@ -942,12 +1164,13 @@ local HELP = {
   "Drag image files onto the window to import them.",
   "",
   "B brush  F fill  T text  I pick  P pan",
-  "[ ] brush size   , . dither   Z zoom   H text layer",
+  "[ ] brush size  , . brush dither  Z zoom  H text layer",
   "Ctrl: N new  O open  S save  W close tab  Q quit",
   "      Z undo  Y redo  Tab next tab",
   "",
   "Text tool: click to add/select a box, type to edit,",
   "drag to move. Palette L/R = text / background.",
+  "Click the size (bottom right) to resize or scale.",
   "",
   "Press any key.",
 }
@@ -956,7 +1179,7 @@ menuItems = {
   { "New", "^N", function() local r = prompt("Size WxH: ", W .. "x" .. viewH())
       if not r then return end
       local w, h = r:match("(%d+)%s*[xX, ]%s*(%d+)")
-      addDoc(blankDoc(max(1, min(512, tonumber(w) or W)), max(1, min(512, tonumber(h) or viewH())))) end },
+      addNewDoc(blankDoc(max(1, min(512, tonumber(w) or W)), max(1, min(512, tonumber(h) or viewH())))) end },
   { "Open...", "^O", function() local r = prompt("Open: ", "", completePath); if r and r ~= "" then openPath(r) end end },
   { "Save", "^S", function() saveDoc() end },
   { "Save as...", "", function() saveDoc(nil, true) end },
@@ -967,6 +1190,7 @@ menuItems = {
         if data then importData(r, data) else setStatus("Cannot read " .. r) end
       end end },
   { "Resize canvas...", "", resizeCanvas },
+  { "Scale image...", "", scaleImage },
   { "Edit colour L...", "", editColour },
   { "Default palette", "", resetPalette },
   { "Undo", "^Z", function() undo() end },
@@ -1070,8 +1294,9 @@ local function click(button, x, y)
       if x >= t[1] and x <= t[2] then deselect(); cur = t[3]; applyPalette(); return end
       if x == t[4] then closeDoc(t[3]); return end
     end
-    if x == tabHits.plus then addDoc(blankDoc()) end
+    if x == tabHits.plus then addNewDoc(blankDoc()) end
   elseif y == H - 1 then
+    if sizeHit and x >= sizeHit[1] and x <= sizeHit[2] then sizeMenu(); return end
     local sw = W >= 40 and 2 or 1
     local c = floor((x - 1) / sw)
     if c >= 0 and c <= 15 then
@@ -1150,7 +1375,7 @@ end
 ---------------------------------------------------------------------------
 local function main()
   for _, f in ipairs(files) do openPath(f) end
-  if #docs == 0 then addDoc(blankDoc()) end
+  if #docs == 0 then addNewDoc(blankDoc()) end
   cur = 1
   applyPalette()
   clampView(doc())
@@ -1173,11 +1398,9 @@ local function main()
       if ev[2] == keys.leftCtrl or ev[2] == keys.rightCtrl then ctrl = false end
       if ev[2] == keys.leftShift or ev[2] == keys.rightShift then shift = false end
     elseif e == "char" and sel and not ctrl then textInsert(ev[2])
+    elseif e == "paste" and sel then textInsert(ev[2])
     elseif e == "file_transfer" then handleFiles(ev[2])
-    elseif e == "term_resize" or e == "monitor_resize" then
-      W, H = display.getSize()
-      win.reposition(1, 1, W, H)
-      for _, d in ipairs(docs) do clampView(d) end
+    elseif e == "term_resize" or e == "monitor_resize" then onResize()
     end
   end
 end

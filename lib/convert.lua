@@ -144,12 +144,65 @@ end
 -- Palette optimisation (median cut + k-means refinement)
 ---------------------------------------------------------------------------
 
-local function optimisePalette(R, G, B, n, yield)
-  local step = math.max(1, floor(n / 12000))
+local function samplePoints(R, G, B, n, limit)
+  local step = math.max(1, floor(n / limit))
   local pts = {}
   for i = 1, n, step do pts[#pts + 1] = { R[i], G[i], B[i] } end
+  return pts
+end
+
+local function pdist(r1, g1, b1, r2, g2, b2)
+  local dr, dg, db = r1 - r2, g1 - g2, b1 - b2
+  return 2 * dr * dr + 4 * dg * dg + 3 * db * db
+end
+
+local function luma(c) local r, g, b = adimg.rgb(c); return r * 0.3 + g * 0.59 + b * 0.11 end
+
+-- Picks the k colours of the default palette that represent the image best
+-- (greedy: repeatedly add the colour that lowers the total error most).
+local function defaultSubset(R, G, B, n, k, yield)
+  local pts = samplePoints(R, G, B, n, 3000)
+  local DP = adimg.DEFAULT_PALETTE
+  local PR, PG, PB = {}, {}, {}
+  for c = 0, 15 do PR[c], PG[c], PB[c] = adimg.rgb(DP[c]) end
+  local best = {} -- current error per point
+  for i = 1, #pts do best[i] = math.huge end
+  local chosen, used = {}, {}
+  for _ = 1, k do
+    local bc, berr = nil, math.huge
+    for c = 0, 15 do
+      if not used[c] then
+        local err = 0
+        for i = 1, #pts do
+          local p = pts[i]
+          local d = pdist(p[1], p[2], p[3], PR[c], PG[c], PB[c])
+          err = err + (d < best[i] and d or best[i])
+        end
+        if err < berr then bc, berr = c, err end
+      end
+    end
+    used[bc] = true
+    chosen[#chosen + 1] = bc
+    for i = 1, #pts do
+      local p = pts[i]
+      local d = pdist(p[1], p[2], p[3], PR[bc], PG[bc], PB[bc])
+      if d < best[i] then best[i] = d end
+    end
+    if yield then yield() end
+  end
+  table.sort(chosen)
+  return chosen
+end
+
+-- Builds a custom palette with k colours fitted to the image (median cut +
+-- k-means). The image colours go in slots 0..k-1 (bright -> dark); spare
+-- slots are filled with default colours that differ most from them, so
+-- there is something left to draw with.
+local function optimisePalette(R, G, B, n, yield, k)
+  k = k or 16
+  local pts = samplePoints(R, G, B, n, 12000)
   local boxes = { { 1, #pts } }
-  while #boxes < 16 do
+  while #boxes < k do
     -- pick the box with the largest channel range
     local best, bestRange, bestCh = nil, -1, 1
     for bi, bx in ipairs(boxes) do
@@ -206,26 +259,43 @@ local function optimisePalette(R, G, B, n, yield)
       if s[4] > 0 then cen[k] = { s[1] / s[4], s[2] / s[4], s[3] / s[4] } end
     end
   end
-  -- fill unused slots, order bright -> dark (like the default palette)
-  local defaults = { { 240, 240, 240 }, { 17, 17, 17 }, { 153, 153, 153 }, { 76, 76, 76 } }
-  local di = 1
-  while #cen < 16 do cen[#cen + 1] = defaults[di] or { 0, 0, 0 }; di = di + 1 end
-  table.sort(cen, function(a, b)
-    return a[1] * 0.3 + a[2] * 0.59 + a[3] * 0.11 > b[1] * 0.3 + b[2] * 0.59 + b[3] * 0.11
-  end)
-  local pal = {}
-  for k = 1, 16 do
-    local c = cen[k]
-    pal[k - 1] = floor(c[1] + 0.5) * 65536 + floor(c[2] + 0.5) * 256 + floor(c[3] + 0.5)
+  local cols = {}
+  for i, c in ipairs(cen) do
+    cols[i] = floor(c[1] + 0.5) * 65536 + floor(c[2] + 0.5) * 256 + floor(c[3] + 0.5)
   end
-  return pal
+  table.sort(cols, function(a, b) return luma(a) > luma(b) end)
+  local used = #cols -- may be < k for images with few colours
+  -- spare slots: default colours furthest from everything chosen so far
+  local spare, taken = {}, {}
+  while #cols + #spare < 16 do
+    local bc, bd = nil, -1
+    for c = 0, 15 do
+      if not taken[c] then
+        local dc = adimg.DEFAULT_PALETTE[c]
+        local md = math.huge
+        for _, x in ipairs(cols) do md = math.min(md, adimg.dist(dc, x)) end
+        for _, x in ipairs(spare) do md = math.min(md, adimg.dist(dc, x)) end
+        if md > bd then bc, bd = c, md end
+      end
+    end
+    taken[bc] = true
+    spare[#spare + 1] = adimg.DEFAULT_PALETTE[bc]
+  end
+  table.sort(spare, function(a, b) return luma(a) > luma(b) end)
+  local pal, allowed = {}, {}
+  for i = 1, 16 do
+    pal[i - 1] = cols[i] or spare[i - #cols]
+    if i <= used then allowed[i] = i - 1 end
+  end
+  return pal, allowed
 end
 
 ---------------------------------------------------------------------------
 -- Quantisation with the 2-colours-per-cell constraint
 ---------------------------------------------------------------------------
 
-local function quantise(R, G, B, cw, ch, palette, dither, yield)
+local function quantise(R, G, B, cw, ch, palette, dither, yield, allowed)
+  local nal = #allowed
   local pw = cw * 2
   local PR, PG, PB = {}, {}, {}
   for i = 0, 15 do PR[i], PG[i], PB[i] = adimg.rgb(palette[i]) end
@@ -245,8 +315,9 @@ local function quantise(R, G, B, cw, ch, palette, dither, yield)
       for p = 1, 6 do
         local i = base + offs[p]
         local vr, vg, vb = clamp(r[i]), clamp(g[i]), clamp(b[i])
-        local b1, b2, d1, d2 = 0, 0, math.huge, math.huge
-        for c = 0, 15 do
+        local b1, b2, d1, d2 = allowed[1], allowed[1], math.huge, math.huge
+        for ai = 1, nal do
+          local c = allowed[ai]
           local dr, dg, db = vr - PR[c], vg - PG[c], vb - PB[c]
           local dd = 2 * dr * dr + 4 * dg * dg + 3 * db * db
           d[p * 16 + c] = dd
@@ -318,6 +389,7 @@ end
 
 -- Imports an encoded image file (string) into a new adimg image.
 -- opts: w, h (cells), dither (bool), optimise (bool: custom palette),
+--       colours (2..16, how many palette colours the image may use),
 --       background (0xRRGGBB used behind transparent pixels), yield, status(msg)
 function M.import(data, opts)
   local info, err = M.info(data)
@@ -334,15 +406,22 @@ function M.import(data, opts)
   if not ok then return nil, tostring(R) end
   R, G, B = orient(R, G, B, rw, rh, info.orientation, tw, th)
   local palette = adimg.DEFAULT_PALETTE
-  local custom = nil
+  local custom, allowed = nil, nil
+  local k = math.max(2, math.min(16, opts.colours or 16))
   if opts.optimise then
     status("Optimising palette...")
-    custom = optimisePalette(R, G, B, tw * th, opts.yield)
+    custom, allowed = optimisePalette(R, G, B, tw * th, opts.yield, k)
     palette = custom
+  elseif k < 16 then
+    status("Choosing colours...")
+    allowed = defaultSubset(R, G, B, tw * th, k, opts.yield)
+  else
+    allowed = {}
+    for c = 0, 15 do allowed[c + 1] = c end
   end
   status("Quantising...")
   local img = adimg.new(cw, ch, 15)
-  img.px = quantise(R, G, B, cw, ch, palette, opts.dither, opts.yield)
+  img.px = quantise(R, G, B, cw, ch, palette, opts.dither, opts.yield, allowed)
   img.palette = custom
   return img
 end
