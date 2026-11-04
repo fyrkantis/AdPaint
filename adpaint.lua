@@ -22,6 +22,8 @@ Usage:
    -c, --colours <n>  colours to use, 2-16 (16)
    -p, --palette <p>  optimised (default) or default
    -n, --no-dither    don't dither
+       --mode <m>     fit (default)/fill/stretch
+                      when the aspect ratio changes
    -f, --force        overwrite out.adi
  adpaint setup        filename completion at boot
  adpaint help         this text
@@ -55,7 +57,7 @@ end
 ---------------------------------------------------------------------------
 local NUMBER_OPTS = { ["-w"] = true, ["--width"] = true, ["--height"] = true, ["-c"] = true,
                       ["--colours"] = true, ["--colors"] = true, ["-s"] = true }
-local CONVERT_OPTS = { "--width", "--height", "--colours", "--palette", "--no-dither", "--force" }
+local CONVERT_OPTS = { "--width", "--height", "--colours", "--palette", "--no-dither", "--mode", "--force" }
 
 local function completeArgs(sh, index, text, previous)
   local ok, c = pcall(require, "cc.shell.completion")
@@ -63,6 +65,7 @@ local function completeArgs(sh, index, text, previous)
   local prev = previous[#previous]
   if NUMBER_OPTS[prev] then return {} end
   if prev == "-m" then return c.peripheral(sh, text, previous, true) end
+  if prev == "--mode" then return c.choice(sh, text, previous, { "fit", "fill", "stretch" }, true) end
   if prev == "-p" or prev == "--palette" then
     return c.choice(sh, text, previous, { "optimised", "default" }, true)
   end
@@ -109,7 +112,7 @@ local function setup()
 end
 
 local function cliConvert(argv)
-  local opt = { colours = 16, optimise = true, dither = true }
+  local opt = { colours = 16, optimise = true, dither = true, mode = "fit" }
   local input, output, force
   local i = 1
   while i <= #argv do
@@ -120,6 +123,12 @@ local function cliConvert(argv)
     elseif a == "-c" or a == "--colours" or a == "--colors" then opt.colours = tonumber(v) or 16; i = i + 2
     elseif a == "-p" or a == "--palette" then opt.optimise = (v or ""):sub(1, 1):lower() ~= "d"; i = i + 2
     elseif a == "-n" or a == "--no-dither" then opt.dither = false; i = i + 1
+    elseif a == "--mode" then
+      opt.mode = (v or ""):lower()
+      if opt.mode ~= "fit" and opt.mode ~= "fill" and opt.mode ~= "stretch" then
+        printError("--mode must be fit, fill or stretch"); return
+      end
+      i = i + 2
     elseif a == "-f" or a == "--force" then force = true; i = i + 1
     elseif a:sub(1, 1) == "-" then printError("Unknown option " .. a); return
     elseif not input then input = a; i = i + 1
@@ -1117,8 +1126,8 @@ end
 -- 3x3 grid. Returns ax, ay in {0, 0.5, 1}, or nil if cancelled.
 local ANCHOR_NAMES = { "top left", "top", "top right", "left", "centre", "right",
                        "bottom left", "bottom", "bottom right" }
-local function chooseAnchor(title)
-  local pick = 1
+local function chooseAnchor(title, default)
+  local pick = default or 1
   while true do
     local hits, cells = nil, {}
     draw(function()
@@ -1183,6 +1192,18 @@ local function chooseAnchor(title)
   end
 end
 
+-- Asked when a new size has a different aspect ratio than the image.
+-- Returns mode ("fit"/"fill"/"stretch"), ax, ay, or nil if cancelled.
+local function chooseScaleMode()
+  local mode = choose("New aspect ratio:",
+    { { "Fit", "fit" }, { "Fill", "fill" }, { "Stretch", "stretch" }, { "Cancel", "c" } })
+  if mode ~= "fit" and mode ~= "fill" and mode ~= "stretch" then return nil end
+  if mode == "stretch" then return mode, 0.5, 0.5 end
+  local ax, ay = chooseAnchor(mode == "fit" and "Place image at:" or "Keep this part:", 5)
+  if not ax then return nil end
+  return mode, ax, ay
+end
+
 local function completePath(text)
   return fs.complete(text, shell.dir(), true, true)
 end
@@ -1241,6 +1262,11 @@ local function importData(name, data)
   r = prompt("Height (cells): ", tostring(dh))
   if not r then return end
   local ch = max(1, min(512, tonumber(r) or dh))
+  local mode, ax, ay = "stretch", 0.5, 0.5
+  if ch ~= dh then
+    mode, ax, ay = chooseScaleMode()
+    if not mode then return end
+  end
   local dith = choose("Dithering:", { { "Dither", true }, { "None", false }, { "Cancel", "c" } })
   if dith == nil or dith == "c" then return end
   local opt = choose("Palette:", { { "Optimised", true }, { "Default", false }, { "Cancel", "c" } })
@@ -1251,6 +1277,7 @@ local function importData(name, data)
   busy("Importing...")
   local ok, img, ierr = pcall(convert.import, data, {
     w = cw, h = ch, dither = dith, optimise = opt, colours = ncol,
+    mode = mode, ax = ax, ay = ay,
     background = palette()[secondary],
     yield = yielder(),
     status = function(m) busy(m) end,
@@ -1390,34 +1417,42 @@ local function resizeCanvas()
   setStatus(("Canvas is now %dx%d"):format(nw, nh))
 end
 
--- Scales the image (nearest neighbour), then makes every cell 2-colour
--- again. The canvas either follows the new size, or keeps its size with the
--- scaled image placed at a chosen anchor. Text boxes move along.
+-- Scales the image to exactly the entered size (nearest neighbour), then
+-- makes every cell 2-colour again. If the aspect ratio changes, the image
+-- is fitted (bars in the R colour), filled (cropped) or stretched.
+-- Text boxes move along.
 local function scaleImage()
   local d = doc()
   local img = d.img
   local r = prompt("Image width (cells): ", tostring(img.w))
   if not r then return end
   local nw = max(1, min(512, floor(tonumber(r) or img.w)))
-  r = prompt("Image height (cells): ", tostring(max(1, floor(img.h * nw / img.w + 0.5))))
+  local keepH = max(1, floor(img.h * nw / img.w + 0.5))
+  r = prompt("Image height (cells): ", tostring(keepH))
   if not r then return end
   local nh = max(1, min(512, floor(tonumber(r) or img.h)))
   if nw == img.w and nh == img.h then return end
-  local mode = choose("Canvas:", { { "Fit image", "fit" }, { "Keep size", "keep" }, { "Cancel", "c" } })
-  if mode ~= "fit" and mode ~= "keep" then return end
-  local ax, ay = 0, 0
-  if mode == "keep" then
-    ax, ay = chooseAnchor("Place image at:")
-    if not ax then return end
+  local mode, ax, ay = "stretch", 0.5, 0.5
+  if nh ~= keepH then
+    mode, ax, ay = chooseScaleMode()
+    if not mode then return end
   end
   deselect()
   beginOp("full")
-  local new = adimg.new(nw, nh, 0)
-  for y = 0, new.ph - 1 do
-    local sy = min(img.ph - 1, floor((y + 0.5) * img.ph / new.ph))
-    for x = 0, new.pw - 1 do
-      local sx = min(img.pw - 1, floor((x + 0.5) * img.pw / new.pw))
-      new.px[y * new.pw + x + 1] = img.px[sy * img.pw + sx + 1]
+  local tw, th = nw * 2, nh * 3
+  local dw, dh, ox, oy = adimg.fitRect(img.pw, img.ph, tw, th, mode, ax, ay)
+  local new = adimg.new(nw, nh, secondary)
+  for y = 0, th - 1 do
+    local yy = y - oy
+    if yy >= 0 and yy < dh then
+      local sy = min(img.ph - 1, floor((yy + 0.5) * img.ph / dh))
+      for x = 0, tw - 1 do
+        local xx = x - ox
+        if xx >= 0 and xx < dw then
+          local sx = min(img.pw - 1, floor((xx + 0.5) * img.pw / dw))
+          new.px[y * tw + x + 1] = img.px[sy * img.pw + sx + 1]
+        end
+      end
     end
   end
   new.palette = img.palette
@@ -1429,17 +1464,13 @@ local function scaleImage()
   op = saved
   local text = adimg.copyText(img.text)
   for _, b in ipairs(text) do
-    b.x = max(1, min(nw, floor((b.x - 1) * nw / img.w + 0.5) + 1))
-    b.y = max(1, min(nh, floor((b.y - 1) * nh / img.h + 0.5) + 1))
+    -- map the box's top-left pixel and round to the nearest cell
+    local px = (b.x - 1) * 2 * dw / img.pw + ox
+    local py = (b.y - 1) * 3 * dh / img.ph + oy
+    b.x = max(1, min(nw, floor(px / 2 + 0.5) + 1))
+    b.y = max(1, min(nh, floor(py / 3 + 0.5) + 1))
   end
-  local cw, ch = nw, nh
-  if mode == "keep" then
-    cw, ch = img.w, img.h
-    local ox, oy = anchorOffset(cw, nw, ax), anchorOffset(ch, nh, ay)
-    new = placePixels(new, cw, ch, ox, oy, secondary)
-    moveText(text, ox, oy, cw, ch)
-  end
-  img.px, img.w, img.h, img.pw, img.ph, img.text = new.px, cw, ch, new.pw, new.ph, text
+  img.px, img.w, img.h, img.pw, img.ph, img.text = new.px, nw, nh, new.pw, new.ph, text
   endOp()
   clampView(d)
   setStatus(("Image scaled to %dx%d"):format(nw, nh))

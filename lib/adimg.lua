@@ -314,6 +314,20 @@ function M.dist(a, b)
   return (2 + rm / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rm) / 256) * db * db
 end
 
+-- Where a sw x sh picture goes in a tw x th area (any units, e.g. pixels):
+--   "stretch" fills the area exactly, "fit" keeps the aspect ratio and
+--   leaves bars, "fill" keeps the aspect ratio and crops the overflow.
+-- ax/ay (0, 0.5, 1) anchor the picture in the area. Returns integer
+-- dw, dh (scaled size) and ox, oy (offset; negative when cropping).
+function M.fitRect(sw, sh, tw, th, mode, ax, ay)
+  if mode ~= "fit" and mode ~= "fill" then return tw, th, 0, 0 end
+  local s = (mode == "fit" and math.min or math.max)(tw / sw, th / sh)
+  local dw, dh = math.max(1, floor(sw * s + 0.5)), math.max(1, floor(sh * s + 0.5))
+  if mode == "fit" then dw, dh = math.min(dw, tw), math.min(dh, th)
+  else dw, dh = math.max(dw, tw), math.max(dh, th) end
+  return dw, dh, floor((tw - dw) * (ax or 0.5) + 0.5), floor((th - dh) * (ay or 0.5) + 0.5)
+end
+
 -- Deep copy of a text layer (used for undo).
 function M.copyText(text)
   local t = {}

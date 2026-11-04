@@ -23,12 +23,13 @@ To make the bundles yourself, run `python3 build.py`; they are written to `dist/
 adpaint [file ...]                 open .adi files in tabs (PNG/JPEG/BMP are imported)
 adpaint -m <side> [-s <scale>] ... paint on an advanced monitor
 adpaint convert <image> [out.adi] [-w <cells>] [--height <cells>] [-c <2-16>]
-                [-p optimised|default] [--no-dither] [--force]
+                [-p optimised|default] [--no-dither] [--mode fit|fill|stretch] [--force]
 adpaint setup                      enable filename completion at every boot
 adpaint help
 ```
 `convert` turns an image into an .adi without opening the editor (by default it fits the
-terminal, uses 16 colours, an optimised palette and dithering, and writes next to the input).
+terminal, uses 16 colours, an optimised palette and dithering, fits with white bars when both
+sizes are given, and writes next to the input).
 Tab completion for subcommands, options, files and monitor names is active after adpaint has
 run once; `adpaint setup` adds one line to your startup so it's there after reboots too.
 
@@ -48,8 +49,10 @@ run once; `adpaint setup` adds one line to your startup so it's there after rebo
   cells, so the brush paints whole cells there.
 * The size at the bottom right is a button: change the **canvas** size (crop/extend) or
   **scale the image** (text boxes move along). Resizing the canvas asks which corner, side or
-  the centre to keep the image at (tap a square twice, or use the arrows and Enter). Scaling asks
-  whether the canvas should fit the new size or keep its size, with the image placed at an anchor.
+  the centre to keep the image at (tap a square twice, or use the arrows and Enter). Scaling
+  always gives exactly the size you enter; if that changes the aspect ratio you choose **Fit**
+  (keep the ratio, bars in the R colour), **Fill** (keep the ratio, crop the overflow) or
+  **Stretch**, and for Fit/Fill an anchor (centre by default).
 * Every prompt and question on the bottom row has touch buttons (OK/Cancel, Save/Discard/Cancel...),
   so nothing gets stuck on a touch-only monitor. File prompts suggest completions (greyed out):
   Tab, Right or tapping the field accepts, Up/Down cycles.
@@ -69,7 +72,8 @@ use Import image in the menu, open them from the command line, or use `adpaint c
 Files dropped while a prompt is open are imported once it closes. CC: Tweaked limits how big a
 dropped file can be (server config `upload_max_size`), so very large photos may need shrinking first.
 
-You choose the size in cells (a cell is 2x3 pixels), dithering, an **optimised**
+You choose the size in cells (a cell is 2x3 pixels; if it changes the aspect ratio you get the
+same Fit / Fill / Stretch choice as when scaling, with Fit bars in the R colour), dithering, an **optimised**
 palette (median cut + k-means, stored in the file and applied to the monitor) or the
 **default** CC palette, and how many **colours** (2-16) the image may use. With fewer
 colours, the spare palette slots stay free for drawing on top later (with an optimised palette

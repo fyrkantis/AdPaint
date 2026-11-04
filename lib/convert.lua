@@ -390,6 +390,7 @@ end
 -- Imports an encoded image file (string) into a new adimg image.
 -- opts: w, h (cells), dither (bool), optimise (bool: custom palette),
 --       colours (2..16, how many palette colours the image may use),
+--       mode ("stretch" (default), "fit" or "fill") with anchor ax, ay,
 --       background (0xRRGGBB used behind transparent pixels), yield, status(msg)
 function M.import(data, opts)
   local info, err = M.info(data)
@@ -398,13 +399,35 @@ function M.import(data, opts)
   if cw and not ch then ch = select(2, M.fitCells(info, cw, math.huge)) end
   if not cw or not ch then cw, ch = M.fitCells(info, opts.maxW or 51, opts.maxH or 19) end
   local tw, th = cw * 2, ch * 3
-  local rw, rh = tw, th
-  if info.orientation >= 5 then rw, rh = th, tw end
+  -- the picture's size/offset inside the target (fit/fill/stretch)
+  local dw, dh, ox, oy = adimg.fitRect(info.dw, info.dh, tw, th, opts.mode or "stretch", opts.ax, opts.ay)
+  local rw, rh = dw, dh
+  if info.orientation >= 5 then rw, rh = dh, dw end
   local status = opts.status or function() end
   status("Decoding " .. info.format:upper() .. " " .. info.w .. "x" .. info.h .. "...")
   local ok, R, G, B = pcall(resample, data, info, rw, rh, opts.background or 0xFFFFFF, opts.yield)
   if not ok then return nil, tostring(R) end
-  R, G, B = orient(R, G, B, rw, rh, info.orientation, tw, th)
+  R, G, B = orient(R, G, B, rw, rh, info.orientation, dw, dh)
+  if dw ~= tw or dh ~= th or ox ~= 0 or oy ~= 0 then
+    -- place the picture: bars (fit) get the background colour, overflow
+    -- (fill) is cropped
+    local br, bg, bb = adimg.rgb(opts.background or 0xFFFFFF)
+    local R2, G2, B2 = {}, {}, {}
+    for y = 0, th - 1 do
+      local sy = y - oy
+      for x = 0, tw - 1 do
+        local sx = x - ox
+        local d = y * tw + x + 1
+        if sx >= 0 and sy >= 0 and sx < dw and sy < dh then
+          local s = sy * dw + sx + 1
+          R2[d], G2[d], B2[d] = R[s], G[s], B[s]
+        else
+          R2[d], G2[d], B2[d] = br, bg, bb
+        end
+      end
+    end
+    R, G, B = R2, G2, B2
+  end
   local palette = adimg.DEFAULT_PALETTE
   local custom, allowed = nil, nil
   local k = math.max(2, math.min(16, opts.colours or 16))
