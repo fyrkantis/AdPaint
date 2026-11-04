@@ -79,8 +79,8 @@ adview setup | help
   While a box is selected, L/R in the palette set the text and background colour, and "No bg" makes
   the background transparent. When zoomed in, text boxes get a thin frame (yellow when selected)
   so you can see how the letters line up with the image. `H` / `Txt` hides the text layer; the pixels under it are still there.
-* Shortcuts: Ctrl+N/O/S/W/Q/Z/Y, Tab next tab, B F T I P tools, `[ ]` size, `, .` dither,
-  E edits the L colour (also in the menu): separate R, G and B values with `<<` `<` `>` `>>`
+* Shortcuts: Ctrl+N/O/S/W/Q/Z/Y/E, Tab next tab, B F T I P tools, `[ ]` size, `, .` dither.
+  Ctrl+E (or just E) edits the L colour (also in the menu): separate R, G and B values with `<<` `<` `>` `>>`
   buttons (steps of 16 / 1), tap a value to type it, or `Hex...` for a hex code. Keyboard:
   Up/Down pick a channel, Left/Right step (Shift: 16), digits type a value. Every change is
   previewed live; Cancel restores the colour.

@@ -1663,10 +1663,10 @@ local HELP = {
   "Drag image files onto the window to import them.",
   "",
   "B brush  F fill  T text  I pick  P pan",
-  "E edit colour L (R/G/B or hex, live preview)",
+  "E (or Ctrl+E) edit colour L, with live preview",
   "[ ] brush size  , . brush dither  Z zoom  H text layer",
   "Ctrl: N new  O open  S save  W close tab  Q quit",
-  "      Z undo  Y redo  Tab next tab",
+  "      Z undo  Y redo  E edit colour L  Tab next tab",
   "Arrows at the top right: undo / redo.",
   "",
   "Text tool: click to add/select a box, type to edit,",
@@ -1693,7 +1693,7 @@ menuItems = {
       end end },
   { "Resize canvas...", "", resizeCanvas },
   { "Scale image...", "", scaleImage },
-  { "Edit colour L...", "E", editColour },
+  { "Edit colour L...", "^E", editColour },
   { "Default palette", "", resetPalette },
   { "Undo", "^Z", function() undo() end },
   { "Redo", "^Y", function() undo(true) end },
@@ -1848,6 +1848,7 @@ local CTRL = {
   [keys.q] = quit,
   [keys.z] = function() undo() end,
   [keys.y] = function() undo(true) end,
+  [keys.e] = function() editColour() end,
 }
 
 local function keyDown(k)
