@@ -240,7 +240,10 @@ local CHARS = {}
 for i = 0, 31 do CHARS[i] = string.char(128 + i) end
 
 local function doc() return docs[cur] end
-local function palette(d) return (d or doc()).img.palette or adimg.DEFAULT_PALETTE end
+local function palette(d)
+  d = d or doc()
+  return d and d.img.palette or adimg.DEFAULT_PALETTE -- no tab yet: default
+end
 
 local function setStatus(msg, secs)
   status = msg
@@ -931,6 +934,16 @@ end
 
 local function draw(overlay)
   win.setVisible(false)
+  if not doc() then
+    -- no tab yet (e.g. "adpaint image.png" asks its import questions first)
+    win.setBackgroundColour(2 ^ ui.dark)
+    win.clear()
+    win.setCursorBlink(false)
+    drawStatus()
+    if overlay then overlay() end
+    win.setVisible(true)
+    return
+  end
   drawCanvas()
   drawTabs()
   drawPalette()
@@ -1268,7 +1281,8 @@ local function importData(name, data)
   local info, err = convert.info(data)
   if not info then setStatus(name .. ": " .. tostring(err)); return end
   local dw = convert.fitCells(info, W, viewH())
-  local r = prompt(("%s %dx%d. Width (cells): "):format(fs.getName(name), info.dw, info.dh), tostring(dw))
+  setStatus(("%s: %dx%d %s"):format(fs.getName(name), info.dw, info.dh, info.format:upper()), 30)
+  local r = prompt("Width (cells): ", tostring(dw))
   if not r then return end
   local cw = max(1, min(512, tonumber(r) or dw))
   local _, dh = convert.fitCells(info, cw, math.huge)
@@ -1865,6 +1879,7 @@ end
 -- Main
 ---------------------------------------------------------------------------
 local function main()
+  computeUi() -- prompts may be shown before the first tab exists
   for _, f in ipairs(files) do openPath(f) end
   if #docs == 0 then
     addDoc(blankDoc())
