@@ -52,15 +52,17 @@ adview setup | help
 
 ## Editor
 * New canvases are 18x24 cells by default.
-* Tabs: the top row. `=` opens the menu, `x` closes a tab, `+` adds a blank canvas.
+* Layout, top to bottom: tabs, canvas, a **settings bar** for the current tool, the palette, and
+  the tool bar. Tools show as icon + name, or just icons on narrow screens (pocket computers).
+* Tabs: the top row. `=` opens the menu, `×` closes a tab, `+` adds a blank canvas.
   The two arrows at the top right are undo and redo (also Ctrl+Z / Ctrl+Y).
   Opening a PNG/JPEG/BMP imports it. Dragging image files onto the window imports them too.
 * Left click paints with the **L** colour and right click with **R**; pick both in the palette row.
   Each tab remembers its own L/R; a new tab starts with the darkest and brightest colour
   (black / white with the default palette).
-* Tools: **Brush** (size `S-+` and dither `D-+` 1..8, 8 = solid; only shown for the brush.
-  With dithering, brushes bigger than 2 are soft: dense in the middle, fading towards the rim),
-  **Fill** (always solid), **Text**, **Pick**, **Pan**.
+* Tools: **Brush** (Size and Dither 1..8, 8 = solid, in the settings bar. With dithering,
+  brushes bigger than 2 are soft: dense in the middle, fading towards the rim),
+  **Fill** (always solid), **Text**, **Pick**, **Pan** (settings bar arrows scroll the view).
 * **Zoom** (`Z`) toggles between the real teletext view and a zoomed view where each cell is
   6x6 characters (3x2 per pixel, so pixels look square). At 1x the mouse can only aim at whole
   cells, so the brush paints whole cells there.
@@ -75,15 +77,21 @@ adview setup | help
   Tab, Right or tapping the field accepts, Up/Down cycles.
 * Panning: middle-drag, the arrow keys (hold Shift for bigger steps), the scroll wheel
   (hold Shift to scroll sideways), or the Pan tool.
-* Text tool: click to add a box or select one, type to edit it (Enter adds a line), drag to move it.
-  While a box is selected, L/R in the palette set the text and background colour, and "No bg" makes
-  the background transparent. When zoomed in, text boxes get a thin frame (yellow when selected)
+* Text tool: click to add a box or select one, type to edit it (Enter adds a line), drag or use
+  the settings bar's arrows to move it. While a box is selected, L/R in the palette set the text
+  and background colour, "No bg" makes the background transparent, and **Chars** opens a grid of
+  special characters the keyboard can't type (the CC font's symbols); tap one to insert it. When zoomed in, text boxes get a thin frame (yellow when selected)
   so you can see how the letters line up with the image. `H` / `Txt` hides the text layer; the pixels under it are still there.
 * Shortcuts: Ctrl+N/O/S/W/Q/Z/Y/E, Tab next tab, B F T I P tools, `[ ]` size, `, .` dither.
   Ctrl+E (or just E) edits the L colour (also in the menu): separate R, G and B values with `<<` `<` `>` `>>`
   buttons (steps of 16 / 1), tap a value to type it, or `Hex...` for a hex code. Keyboard:
   Up/Down pick a channel, Left/Right step (Shift: 16), digits type a value. Every change is
   previewed live; Cancel restores the colour.
+* **Touch monitors** (`-m`, taps only): the palette row gets a "Sets L / Sets R" toggle that
+  decides which colour a tap picks (also for Pick), the Pan tool scrolls the tapped spot to the
+  middle, and text boxes move with the arrows. The text scale comes from `-s <scale>`, else the
+  setting `adpaint.text_scale` (default 0.5); "Text scale..." in the menu changes it and saves it
+  as that setting (or run `set adpaint.text_scale 1` in the shell).
 * When a paint would give a cell a third colour, the cell keeps the new colour plus its most
   common other colour, and any remaining pixels snap to whichever of those two is nearer.
 

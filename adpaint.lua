@@ -14,7 +14,9 @@ Usage:
  adpaint [file ...]   open .adi files in tabs; PNG,
                       JPEG and BMP files are imported
  adpaint -m <side> [-s <scale>] [file ...]
-                      paint on an advanced monitor
+                      paint on an advanced monitor;
+                      -s text scale 0.5-5 (default:
+                      setting adpaint.text_scale)
  adpaint convert <image> [out.adi] [options]
    -w, --width <n>    width in cells (default: fit
                       this terminal)
@@ -184,12 +186,16 @@ end
 if command == "setup" then setup(); return end
 if command == "convert" then cliConvert({ table.unpack(args, 2) }); return end
 
-local files, monSide, monScale = {}, nil, 0.5
+settings.define("adpaint.text_scale", {
+  description = "Default text scale when adpaint runs on a monitor (-m).",
+  default = 0.5, type = "number",
+})
+local files, monSide, monScale = {}, nil, settings.get("adpaint.text_scale") or 0.5
 do
   local i = 1
   while i <= #args do
     if args[i] == "-m" then monSide = args[i + 1]; i = i + 2
-    elseif args[i] == "-s" then monScale = tonumber(args[i + 1]) or 0.5; i = i + 2
+    elseif args[i] == "-s" then monScale = tonumber(args[i + 1]) or monScale; i = i + 2
     else files[#files + 1] = args[i]; i = i + 1 end
   end
 end
@@ -200,7 +206,7 @@ if monSide then
   if not (mon and mon.isColour and mon.isColour()) then
     printError("No advanced monitor on side '" .. tostring(monSide) .. "'"); return
   end
-  mon.setTextScale(monScale)
+  mon.setTextScale(max(0.5, min(5, floor(monScale * 2 + 0.5) / 2)))
   display = mon
 elseif not term.isColour() then
   printError("adpaint needs an advanced computer (colour + mouse)"); return
@@ -308,7 +314,8 @@ end
 ---------------------------------------------------------------------------
 -- Documents
 ---------------------------------------------------------------------------
-local function viewH() return H - 3 end
+-- Rows: 1 tabs, 2..H-3 canvas, H-2 tool settings, H-1 palette, H tools.
+local function viewH() return H - 4 end
 
 local NEW_W, NEW_H = 18, 24 -- default size of a new canvas, in cells
 
@@ -816,7 +823,8 @@ local function drawCanvas()
   end
 end
 
-local tabHits, toolHits, sizeHit = {}, {}, nil
+local tabHits, toolHits, sizeHit, slotHit = {}, {}, nil, nil
+local touchSlot = 1 -- on monitors (taps only): 1 = palette taps set L/F, 2 = R/B
 
 local function drawTabs()
   win.setCursorPos(1, 1)
@@ -829,7 +837,7 @@ local function drawTabs()
     if x + #label + 1 > W - 8 then break end
     local bg = i == cur and ui.bar or ui.dark
     blitAt(x, 1, label, i == cur and ui.text or ui.dim, bg)
-    blitAt(x + #label, 1, "x", ui.dim, bg)
+    blitAt(x + #label, 1, "\215", ui.dim, bg)
     tabHits[#tabHits + 1] = { x, x + #label - 1, i, x + #label }
     x = x + #label + 2
   end
@@ -861,6 +869,17 @@ local function drawPalette()
     blitAt(1 + c * sw, y, (mark .. "  "):sub(1, sw), fg, c)
   end
   local x = 16 * sw + 2
+  slotHit = nil
+  if monSide then
+    -- taps can't right-click, so a toggle decides which slot a tap sets
+    local names = sel and { "F", "B" } or { "L", "R" }
+    local label = " Sets " .. names[touchSlot] .. " "
+    if x + #label + 8 <= W then
+      blitAt(x, y, label, ui.dark, ui.hi)
+      slotHit = { x, x + #label - 1 }
+      x = x + #label + 1
+    end
+  end
   local d = doc()
   local size = " " .. d.img.w .. "x" .. d.img.h .. " "
   local sx = W - #size + 1
@@ -876,57 +895,138 @@ end
 local function drawStatus()
   if not (status and os.clock() < statusUntil) then return end
   local msg = " " .. status:sub(1, W - 2) .. " "
-  blitAt(W - #msg + 1, H - 2, msg, ui.text, ui.bar)
+  blitAt(W - #msg + 1, viewH() + 1, msg, ui.text, ui.bar)
 end
 
-local function drawToolbar()
-  local y = H
+-- Lays out a row of items { text, action, active, gap } at row y; items
+-- with an action are buttons. Returns the hit list.
+local function rowWidth(items)
+  local w = 0
+  for _, it in ipairs(items) do w = w + #it[1] + (it[4] or 1) end
+  return w
+end
+local function drawRow(y, items, hits)
   win.setCursorPos(1, y)
   win.setBackgroundColour(2 ^ ui.bar); win.clearLine()
-  toolHits = {}
   local x = 1
-  local function btn(label, action, active)
-    if x + #label - 1 > W then return end
-    blitAt(x, y, label, active and ui.dark or ui.text, active and ui.hi or ui.bar)
-    toolHits[#toolHits + 1] = { x, x + #label - 1, action }
-    x = x + #label + 1
+  for _, it in ipairs(items) do
+    local text = it[1]
+    if x > W then break end
+    text = text:sub(1, W - x + 1)
+    if it[2] then
+      blitAt(x, y, text, it[3] and ui.dark or ui.text, it[3] and ui.hi or ui.dark)
+      hits[#hits + 1] = { x, x + #text - 1, it[2] }
+    else
+      blitAt(x, y, text, ui.text, ui.bar)
+    end
+    x = x + #text + (it[4] or 1)
   end
+end
+-- First of several layouts (widest first) that fits the screen.
+local function pickLayout(...)
+  local layouts = { ... }
+  for _, l in ipairs(layouts) do if rowWidth(l) - 1 <= W then return l end end
+  return layouts[#layouts]
+end
+
+local TOOLS = { -- name, label, icon (CC font characters)
+  { "brush", "Brush", "\7" }, { "fill", "Fill", "\8" }, { "text", "Text", "\20" },
+  { "pick", "Pick", "I" }, { "pan", "Pan", "\18" },
+}
+
+local function toggleZoom() setZoom(doc().zoom % #ZOOMS + 1) end
+local function toggleText() showText = not showText end
+
+local function drawToolbar()
+  toolHits = {}
+  local wide, narrow = {}, {}
+  for _, t in ipairs(TOOLS) do
+    local icon = t[3] ~= "I" and t[3] or ""
+    wide[#wide + 1] = { icon .. t[2], t[1], tool == t[1] }
+    narrow[#narrow + 1] = { " " .. t[3] .. " ", t[1], tool == t[1], 0 }
+  end
+  narrow[#narrow][4] = 1
+  for _, l in ipairs({ wide, narrow }) do
+    l[#l + 1] = { "Zoom", toggleZoom, doc().zoom > 1 }
+    l[#l + 1] = { showText and "Txt" or "txt", toggleText, showText }
+  end
+  drawRow(H, pickLayout(wide, narrow), toolHits)
+end
+
+-- Moving things without dragging (touch monitors can only tap).
+local ARROWS = { { "\27", -1, 0 }, { "\24", 0, -1 }, { "\25", 0, 1 }, { "\26", 1, 0 } }
+local function moveBox(dx, dy)
+  local img = doc().img
+  sel.box.x = max(1, min(img.w, sel.box.x + dx))
+  sel.box.y = max(1, min(img.h, sel.box.y + dy))
+  textChanged()
+end
+local function panStep(dx, dy)
+  pan(dx * max(2, floor(W / 4)), dy * max(2, floor(viewH() / 4)))
+end
+local function arrowItems(fn, padded)
+  local items = {}
+  for _, a in ipairs(ARROWS) do
+    items[#items + 1] = { padded and (" " .. a[1] .. " ") or a[1], function() fn(a[2], a[3]) end, false, 0 }
+  end
+  items[#items][4] = 1
+  return items
+end
+local function concat(...)
+  local out = {}
+  for _, t in ipairs({ ... }) do for _, v in ipairs(t) do out[#out + 1] = v end end
+  return out
+end
+
+local charPicker -- special character menu, defined with the prompts
+
+-- The bar above the palette: settings for the current tool.
+local settingsHits = {}
+local function drawSettings()
+  settingsHits = {}
+  local layout
+  local function stepper(name, val, dec, inc, padded)
+    if padded then
+      return { { name }, { " - ", dec }, { ("%2d"):format(val) }, { " + ", inc, false, 2 } }
+    end
+    return { { name, nil, false, 0 }, { "-", dec, false, 0 }, { tostring(val), nil, false, 0 }, { "+", inc } }
+  end
+  local sDec = function() brushSize = max(1, brushSize - 1) end
+  local sInc = function() brushSize = min(16, brushSize + 1) end
+  local dDec = function() dither = max(1, dither - 1) end
+  local dInc = function() dither = min(8, dither + 1) end
   if sel then
-    btn("Text box:", function() end)
-    btn("No bg", function() sel.box.bg = nil; textChanged() end, sel.box.bg == nil)
-    btn("Delete", deleteSelectedBox)
-    btn("Done", deselect)
-    btn("Zoom", function() setZoom(doc().zoom % #ZOOMS + 1) end, doc().zoom > 1)
-    btn(showText and "Txt" or "txt", function() showText = not showText end, showText)
-    return
+    local noBg = function() sel.box.bg = nil; textChanged() end
+    layout = pickLayout(
+      concat({ { " No bg ", noBg, sel.box.bg == nil }, { " Chars ", charPicker }, { " Delete ", deleteSelectedBox },
+               { " Done ", deselect, false, 2 }, { "Move" } }, arrowItems(moveBox, true)),
+      concat({ { "No bg", noBg, sel.box.bg == nil }, { "Chars", charPicker }, { "Del", deleteSelectedBox },
+               { "Done", deselect } }, arrowItems(moveBox, false)))
+  elseif tool == "brush" then
+    layout = pickLayout(concat(stepper("Size", brushSize, sDec, sInc, true), stepper("Dither", dither, dDec, dInc, true)),
+                        concat(stepper("Size", brushSize, sDec, sInc), stepper("Dither", dither, dDec, dInc)))
+  elseif tool == "pan" then
+    layout = pickLayout(concat({ { monSide and "Tap a spot to centre it, or" or "Drag, or use" } }, arrowItems(panStep, true)),
+                        concat({ { "Pan" } }, arrowItems(panStep, true)),
+                        arrowItems(panStep, false))
+  else
+    local verb = monSide and "Tap" or "Click"
+    local hint = ({ fill = verb .. " an area to fill it", pick = verb .. " to pick a colour",
+                    text = verb .. " to add or select a text box" })[tool] or ""
+    layout = { { hint } }
   end
-  local short = W < 47
-  btn(short and "B" or "Brush", "brush", tool == "brush")
-  btn(short and "F" or "Fill", "fill", tool == "fill")
-  btn(short and "T" or "Text", "text", tool == "text")
-  btn(short and "I" or "Pick", "pick", tool == "pick")
-  btn(short and "P" or "Pan", "pan", tool == "pan")
-  local function stepper(name, val, dec, inc)
-    btn(name .. "-", dec); x = x - 1
-    btn(tostring(val), function() end); x = x - 1
-    btn("+", inc)
-  end
-  if tool == "brush" then
-    stepper("S", brushSize, function() brushSize = max(1, brushSize - 1) end,
-      function() brushSize = min(16, brushSize + 1) end)
-    stepper("D", dither, function() dither = max(1, dither - 1) end,
-      function() dither = min(8, dither + 1) end)
-  end
-  btn("Zoom", function() setZoom(doc().zoom % #ZOOMS + 1) end, doc().zoom > 1)
-  btn(showText and "Txt" or "txt", function() showText = not showText end, showText)
+  drawRow(H - 2, layout, settingsHits)
 end
 
 local menuItems -- defined below
 local function drawMenu()
   local w = 0
   for _, it in ipairs(menuItems) do w = max(w, #it[1] + #it[2] + 3) end
+  local icons = w + 2 <= W -- room for an icon column?
+  if icons then w = w + 2 end
   for i, it in ipairs(menuItems) do
-    local label = " " .. it[1] .. string.rep(" ", w - #it[1] - #it[2] - 2) .. it[2] .. " "
+    local text = icons and ((it[4] or " ") .. " " .. it[1]) or it[1]
+    local label = " " .. text .. string.rep(" ", w - #text - #it[2] - 2) .. it[2] .. " "
     blitAt(1, i + 1, label, ui.text, ui.bar)
   end
   menuItems.width = w
@@ -948,6 +1048,7 @@ local function draw(overlay)
   drawTabs()
   drawPalette()
   drawToolbar()
+  drawSettings()
   drawStatus()
   if menuOpen then drawMenu() end
   win.setCursorBlink(false)
@@ -962,7 +1063,7 @@ local function draw(overlay)
     else
       sx, sy = cx - d.vx / 2 + 1, cy - d.vy / 3 + 2
     end
-    if sx >= 1 and sx <= W and sy >= 2 and sy <= H - 2 then
+    if sx >= 1 and sx <= W and sy >= 2 and sy <= viewH() + 1 then
       win.setCursorPos(sx, sy)
       win.setTextColour(2 ^ sel.box.fg)
       win.setCursorBlink(true)
@@ -1162,7 +1263,7 @@ local function chooseAnchor(title, default)
       local x0 = max(1, floor((W - pw) / 2) + 1)
       local y0 = max(2, floor((viewH() - ph) / 2) + 2)
       win.setBackgroundColour(2 ^ ui.bar)
-      for y = y0, min(H - 2, y0 + ph - 1) do
+      for y = y0, min(viewH() + 1, y0 + ph - 1) do
         win.setCursorPos(x0, y); win.write(string.rep(" ", pw))
       end
       win.setCursorPos(x0 + 2, y0 + 1)
@@ -1173,7 +1274,7 @@ local function chooseAnchor(title, default)
         local gy = y0 + 3 + floor((i - 1) / 3) * (bh + 1)
         local c = i == pick and ui.hi or ui.dark
         for y = gy, gy + bh - 1 do
-          if y <= H - 2 then blitAt(gx, y, string.rep(" ", bw), ui.text, c) end
+          if y <= viewH() + 1 then blitAt(gx, y, string.rep(" ", bw), ui.text, c) end
         end
         cells[i] = { gx, gy, gx + bw - 1, gy + bh - 1 }
       end
@@ -1230,6 +1331,80 @@ local function chooseScaleMode()
   return mode, ax, ay
 end
 
+-- Characters the CC font draws that can't be typed on a keyboard.
+local SPECIAL_CHARS = {}
+for _, r in ipairs({ { 0x01, 0x08 }, { 0x0B, 0x0C }, { 0x0E, 0x1F }, { 0x7F, 0x7F }, { 0xA6, 0xA6 },
+                     { 0xA9, 0xB5 }, { 0xB7, 0xBF }, { 0xD7, 0xD7 }, { 0xF7, 0xF8 } }) do
+  for c = r[1], r[2] do SPECIAL_CHARS[#SPECIAL_CHARS + 1] = c end
+end
+
+-- Grid of special characters; tapping one inserts it into the selected
+-- text box. Stays open for several picks; Close (or Tab) closes it.
+-- Keyboard: arrows move, Enter inserts.
+charPicker = function()
+  if not sel then return end
+  local pick = 1
+  while sel do
+    local hits, cells, cols = nil, {}, nil
+    draw(function()
+      cols = max(1, min(16, floor((W - 4) / 3)))
+      local rows = math.ceil(#SPECIAL_CHARS / cols)
+      local pw, ph = cols * 3 + 4, rows + 4
+      local x0 = max(1, floor((W - pw) / 2) + 1)
+      local y0 = max(2, floor((viewH() - ph) / 2) + 2)
+      win.setBackgroundColour(2 ^ ui.bar)
+      for y = y0, min(viewH() + 1, y0 + ph - 1) do win.setCursorPos(x0, y); win.write(string.rep(" ", pw)) end
+      win.setCursorPos(x0 + 2, y0 + 1)
+      win.setTextColour(2 ^ ui.text)
+      win.write(("Insert character"):sub(1, pw - 4))
+      for i, c in ipairs(SPECIAL_CHARS) do
+        local gx = x0 + 2 + ((i - 1) % cols) * 3
+        local gy = y0 + 3 + floor((i - 1) / cols)
+        if gy <= viewH() + 1 then
+          blitAt(gx, gy, " " .. string.char(c) .. " ", i == pick and ui.dark or ui.text, i == pick and ui.hi or ui.dark)
+          cells[i] = { gx, gy }
+        end
+      end
+      win.setCursorPos(1, H)
+      win.setBackgroundColour(2 ^ ui.accent); win.setTextColour(2 ^ ui.text)
+      win.clearLine()
+      local free
+      hits, free = bottomButtons({ { "Close", "close" } })
+      win.setCursorPos(1, H)
+      win.setBackgroundColour(2 ^ ui.accent)
+      win.write(("Character %d (0x%02X)"):format(SPECIAL_CHARS[pick], SPECIAL_CHARS[pick]):sub(1, max(0, free)))
+      win.setCursorBlink(false)
+    end)
+    local ev = { os.pullEventRaw() }
+    local button, x, y = asClick(ev)
+    if ev[1] == "terminate" then return
+    elseif button then
+      if y == H then
+        if hitButton(hits, x) == "close" then return end
+      else
+        for i, c in pairs(cells) do
+          if y == c[2] and x >= c[1] and x <= c[1] + 2 then
+            pick = i
+            textInsert(string.char(SPECIAL_CHARS[i]))
+          end
+        end
+      end
+    elseif ev[1] == "key" then
+      trackModifiers(ev)
+      local k = ev[2]
+      if k == keys.enter or k == keys.numPadEnter then textInsert(string.char(SPECIAL_CHARS[pick]))
+      elseif k == keys.tab then return
+      elseif k == keys.left then pick = max(1, pick - 1)
+      elseif k == keys.right then pick = min(#SPECIAL_CHARS, pick + 1)
+      elseif k == keys.up then pick = max(1, pick - cols)
+      elseif k == keys.down then pick = min(#SPECIAL_CHARS, pick + cols) end
+    elseif ev[1] == "key_up" then trackModifiers(ev)
+    elseif ev[1] == "file_transfer" then pendingFiles[#pendingFiles + 1] = ev[2]
+    elseif ev[1] == "term_resize" or ev[1] == "monitor_resize" then onResize()
+    end
+  end
+end
+
 local function completePath(text)
   return fs.complete(text, shell.dir(), true, true)
 end
@@ -1238,17 +1413,36 @@ local function confirm(question)
   return choose(question, { { "Yes", true }, { "No", false } }) == true
 end
 
+-- Full-screen text (word-wrapped, paged); any key or tap continues.
 local function message(lines)
-  win.setVisible(false)
-  win.setBackgroundColour(2 ^ ui.dark); win.setTextColour(2 ^ ui.text)
-  for y = 2, H do win.setCursorPos(1, y); win.clearLine() end
-  for i, l in ipairs(lines) do
-    win.setCursorPos(2, i + 1); win.write(l:sub(1, W - 2))
+  local wrapped = {}
+  for _, l in ipairs(lines) do
+    if l == "" then wrapped[#wrapped + 1] = "" end
+    local cur = ""
+    for word in l:gmatch("%S+") do
+      if #cur > 0 and #cur + 1 + #word > W - 2 then wrapped[#wrapped + 1] = cur; cur = word
+      else cur = #cur > 0 and (cur .. " " .. word) or word end
+    end
+    if #cur > 0 then wrapped[#wrapped + 1] = cur end
   end
-  win.setVisible(true)
-  repeat
-    local e = os.pullEventRaw()
-  until e == "terminate" or e == "key" or e == "mouse_click" or e == "monitor_touch"
+  local per = H - 2
+  for first = 1, #wrapped, per do
+    win.setVisible(false)
+    win.setBackgroundColour(2 ^ ui.dark); win.setTextColour(2 ^ ui.text)
+    for y = 1, H do win.setCursorPos(1, y); win.clearLine() end
+    for i = first, min(#wrapped, first + per - 1) do
+      win.setCursorPos(2, i - first + 1); win.write(wrapped[i]:sub(1, W - 2))
+    end
+    win.setCursorPos(2, H)
+    win.setTextColour(2 ^ ui.dim)
+    win.write(first + per <= #wrapped and "More: any key or tap" or "Any key or tap closes")
+    win.setVisible(true)
+    local e
+    repeat
+      e = os.pullEventRaw()
+    until e == "terminate" or e == "key" or e == "mouse_click" or e == "monitor_touch"
+    if e == "terminate" then return end
+  end
 end
 
 
@@ -1551,7 +1745,7 @@ local function editColour()
       local x0 = max(1, floor((W - pw) / 2) + 1)
       local y0 = max(2, floor((viewH() - ph) / 2) + 2)
       win.setBackgroundColour(2 ^ ui.bar)
-      for y = y0, min(H - 2, y0 + ph - 1) do win.setCursorPos(x0, y); win.write(string.rep(" ", pw)) end
+      for y = y0, min(viewH() + 1, y0 + ph - 1) do win.setCursorPos(x0, y); win.write(string.rep(" ", pw)) end
       win.setCursorPos(x0 + 2, y0 + 1)
       win.setTextColour(2 ^ ui.text)
       win.write(("Colour %d  #%06x"):format(idx, value()))
@@ -1670,37 +1864,51 @@ local HELP = {
   "Arrows at the top right: undo / redo.",
   "",
   "Text tool: click to add/select a box, type to edit,",
-  "drag to move. Palette L/R = text / background.",
+  "drag or use the arrows to move. Palette L/R = text /",
+  "background. Chars inserts special characters.",
+  "Monitors: tap 'Sets L' to switch L/R; Pan: tap a spot.",
   "Click the size (bottom right) to resize or scale.",
   "Run 'adpaint help' in the shell for command usage.",
-  "",
-  "Press any key.",
 }
 
+-- { label, shortcut, action, icon (CC font character) }
 menuItems = {
   { "New", "^N", function() local r = prompt("Size WxH: ", NEW_W .. "x" .. NEW_H)
       if not r then return end
       local w, h = r:match("(%d+)%s*[xX, ]%s*(%d+)")
-      addDoc(blankDoc(max(1, min(512, tonumber(w) or NEW_W)), max(1, min(512, tonumber(h) or NEW_H)))) end },
-  { "Open...", "^O", function() local r = prompt("Open: ", "", completePath); if r and r ~= "" then openPath(r) end end },
-  { "Save", "^S", function() saveDoc() end },
-  { "Save as...", "", function() saveDoc(nil, true) end },
+      addDoc(blankDoc(max(1, min(512, tonumber(w) or NEW_W)), max(1, min(512, tonumber(h) or NEW_H)))) end, "\43" },
+  { "Open...", "^O", function() local r = prompt("Open: ", "", completePath); if r and r ~= "" then openPath(r) end end, "\63" },
+  { "Save", "^S", function() saveDoc() end, "\33" },
+  { "Save as...", "", function() saveDoc(nil, true) end, "\19" },
   { "Import image...", "", function()
       local r = prompt("Image file: ", "", completePath)
       if r and r ~= "" then
         local data = readFile(shell.resolve(r))
         if data then importData(r, data) else setStatus("Cannot read " .. r) end
-      end end },
-  { "Resize canvas...", "", resizeCanvas },
-  { "Scale image...", "", scaleImage },
-  { "Edit colour L...", "^E", editColour },
-  { "Default palette", "", resetPalette },
-  { "Undo", "^Z", function() undo() end },
-  { "Redo", "^Y", function() undo(true) end },
-  { "Close tab", "^W", function() closeDoc(cur) end },
-  { "Help", "", function() message(HELP) end },
+      end end, "\6" },
+  { "Resize canvas...", "", resizeCanvas, "\172" },
+  { "Scale image...", "", scaleImage, "\3" },
+  { "Edit colour L...", "^E", editColour, "\127" },
+  { "Reset colours", "", resetPalette, "\126" },
+  { "Undo", "^Z", function() undo() end, "\27" },
+  { "Redo", "^Y", function() undo(true) end, "\26" },
+  { "Close tab", "^W", function() closeDoc(cur) end, "\215" },
+  { "Help", "", function() message(HELP) end, "\63" },
   { "Quit", "^Q", quit },
 }
+if monSide then
+  table.insert(menuItems, #menuItems - 1, { "Text scale...", "", function()
+    local r = prompt("Text scale (0.5-5): ", tostring(display.getTextScale()))
+    local sc = tonumber(r or "")
+    if not sc then return end
+    sc = max(0.5, min(5, floor(sc * 2 + 0.5) / 2))
+    display.setTextScale(sc)
+    settings.set("adpaint.text_scale", sc)
+    settings.save()
+    onResize()
+    setStatus("Text scale " .. sc .. " (saved as default)")
+  end })
+end
 
 ---------------------------------------------------------------------------
 -- Input
@@ -1709,10 +1917,20 @@ local function canvasDown(button, x, y)
   local d = doc()
   local native = not zoomInfo(d).zw
   local px, py, cx, cy = screenToImage(x, y)
+  if tool == "pan" and monSide then
+    -- touch: no dragging, so a tap scrolls that spot to the middle
+    local z = zoomInfo(d)
+    local midX, midY = floor(W / 2), floor(viewH() / 2)
+    if z.zw then d.vx, d.vy = px - floor(midX / z.zw), py - floor(midY / z.zh)
+    else d.vx, d.vy = px - midX * 2, py - midY * 3 end
+    clampView(d)
+    return
+  end
   if button == 3 or tool == "pan" then
     drag = { kind = "pan", x = x, y = y }
     return
   end
+  if monSide and tool == "pick" then button = touchSlot end
   local color = button == 1 and primary or secondary
   if tool == "brush" then
     deselect()
@@ -1799,8 +2017,14 @@ local function click(button, x, y)
       if x == t[4] then closeDoc(t[3]); return end
     end
     if x == tabHits.plus then addDoc(blankDoc()) end
+  elseif y == H - 2 then
+    for _, t in ipairs(settingsHits) do
+      if x >= t[1] and x <= t[2] then t[3](); return end
+    end
   elseif y == H - 1 then
     if sizeHit and x >= sizeHit[1] and x <= sizeHit[2] then sizeMenu(); return end
+    if slotHit and x >= slotHit[1] and x <= slotHit[2] then touchSlot = 3 - touchSlot; return end
+    if monSide then button = touchSlot end
     local sw = W >= 40 and 2 or 1
     local c = floor((x - 1) / sw)
     if c >= 0 and c <= 15 then
@@ -1884,7 +2108,7 @@ local function main()
   for _, f in ipairs(files) do openPath(f) end
   if #docs == 0 then
     addDoc(blankDoc())
-    setStatus("Tip: drop image files here (.jpg, .png, or .bmp)", 6)
+    setStatus(W >= 44 and "Tip: drop image files here (.jpg, .png, or .bmp)" or "Tip: drop images here", 6)
   end
   cur = 1
   applyPalette()
@@ -1900,7 +2124,7 @@ local function main()
     elseif e == "monitor_touch" and monSide and ev[2] == peripheral.getName(display) then
       click(1, ev[3], ev[4]); mouseUp()
     elseif e == "mouse_scroll" and not monSide then
-      if ev[4] >= 2 and ev[4] <= H - 2 then
+      if ev[4] >= 2 and ev[4] <= viewH() + 1 then
         if shift then pan(ev[2] * 3, 0) else pan(0, ev[2] * 2) end
       end
     elseif e == "key" then keyDown(ev[2])
