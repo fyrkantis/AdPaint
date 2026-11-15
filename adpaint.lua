@@ -931,7 +931,7 @@ end
 
 local TOOLS = { -- name, label, icon (CC font characters)
   { "brush", "Brush", "\7" }, { "fill", "Fill", "\8" }, { "text", "Text", "\20" },
-  { "pick", "Pick", "I" }, { "pan", "Pan", "\18" },
+  { "pick", "Pick", "\35" }, { "pan", "Pan", "\18" },
 }
 
 local function toggleZoom() setZoom(doc().zoom % #ZOOMS + 1) end
@@ -941,8 +941,7 @@ local function drawToolbar()
   toolHits = {}
   local wide, narrow = {}, {}
   for _, t in ipairs(TOOLS) do
-    local icon = t[3] ~= "I" and t[3] or ""
-    wide[#wide + 1] = { icon .. t[2], t[1], tool == t[1] }
+    wide[#wide + 1] = { t[3] .. t[2], t[1], tool == t[1] }
     narrow[#narrow + 1] = { " " .. t[3] .. " ", t[1], tool == t[1], 0 }
   end
   narrow[#narrow][4] = 1
@@ -1877,9 +1876,9 @@ menuItems = {
       if not r then return end
       local w, h = r:match("(%d+)%s*[xX, ]%s*(%d+)")
       addDoc(blankDoc(max(1, min(512, tonumber(w) or NEW_W)), max(1, min(512, tonumber(h) or NEW_H)))) end, "\43" },
-  { "Open...", "^O", function() local r = prompt("Open: ", "", completePath); if r and r ~= "" then openPath(r) end end, "\63" },
-  { "Save", "^S", function() saveDoc() end, "\33" },
-  { "Save as...", "", function() saveDoc(nil, true) end, "\19" },
+  { "Open...", "^O", function() local r = prompt("Open: ", "", completePath); if r and r ~= "" then openPath(r) end end },
+  { "Save", "^S", function() saveDoc() end },
+  { "Save as...", "", function() saveDoc(nil, true) end },
   { "Import image...", "", function()
       local r = prompt("Image file: ", "", completePath)
       if r and r ~= "" then
@@ -1889,15 +1888,18 @@ menuItems = {
   { "Resize canvas...", "", resizeCanvas, "\172" },
   { "Scale image...", "", scaleImage, "\3" },
   { "Edit colour L...", "^E", editColour, "\127" },
-  { "Reset colours", "", resetPalette, "\126" },
+  { "Reset colours", "", resetPalette },
   { "Undo", "^Z", function() undo() end, "\27" },
   { "Redo", "^Y", function() undo(true) end, "\26" },
-  { "Close tab", "^W", function() closeDoc(cur) end, "\215" },
   { "Help", "", function() message(HELP) end, "\63" },
+  { "Close tab", "^W", function() closeDoc(cur) end, "\215" },
   { "Quit", "^Q", quit },
 }
 if monSide then
-  table.insert(menuItems, #menuItems - 1, { "Text scale...", "", function()
+  -- right under "Reset colours"
+  local at = 1
+  for i, it in ipairs(menuItems) do if it[1] == "Reset colours" then at = i + 1 end end
+  table.insert(menuItems, at, { "Text scale...", "", function()
     local r = prompt("Text scale (0.5-5): ", tostring(display.getTextScale()))
     local sc = tonumber(r or "")
     if not sc then return end
