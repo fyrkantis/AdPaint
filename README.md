@@ -23,13 +23,13 @@ To make the bundles yourself, run `python3 build.py`; they are written to `dist/
 adpaint [file ...]                 open .adi files in tabs (PNG/JPEG/BMP are imported)
 adpaint -m <side> [-s <scale>] ... paint on an advanced monitor
 adpaint convert <image> [out.adi] [-w <cells>] [--height <cells>] [-c <2-16>]
-                [-p optimised|default] [--pixelart] [--no-dither] [--mode bars|fill|stretch] [--force]
+                [-p optimised|default] [--no-dither] [--mode bars|fill|stretch] [--force]
 adpaint setup                      enable filename completion at every boot
 adpaint help
 ```
 `convert` turns an image into an .adi without opening the editor (by default it fits the
-terminal, treats it as a photo with 16 colours, an optimised palette and dithering (`--pixelart`
-for logos/pixel art), uses white bars (`--mode bars`) when both
+terminal, uses 16 colours, an optimised palette and dithering (`--no-dither` keeps logos and
+pixel art crisp), uses white bars (`--mode bars`) when both
 sizes are given, and writes next to the input).
 Tab completion for subcommands, options, files and monitor names is active after adpaint has
 run once; `adpaint setup` adds one line to your startup so it's there after reboots too.
@@ -103,18 +103,17 @@ Files dropped while a prompt is open are imported once it closes. CC: Tweaked li
 dropped file can be (server config `upload_max_size`), so very large photos may need shrinking first.
 
 You choose the size in cells (a cell is 2x3 pixels; if it changes the aspect ratio you get the
-same Bars / Fill / Stretch choice as when scaling, with bars in the R colour), the **image type**,
-an **optimised** palette (stored in the file and applied to the monitor) or the **default** CC
-palette, and how many **colours** (2-16) the image may use.
+same Bars / Fill / Stretch choice as when scaling, with bars in the R colour), **dithering**
+(palette PNGs offer "None" first), an **optimised** palette (stored in the file and applied to the
+monitor) or the **default** CC palette, and how many **colours** (2-16) the image may use.
 
-* **Photo**: pixels are averaged when shrinking, the optimised palette comes from a median cut
-  that always splits the colour group with the largest error (so a big flat background can't
-  use up the palette) plus k-means, and the result is dithered.
-* **Pixel art** (logos, maps, sprites): the image's exact colours are kept. With more colours
-  than allowed, they are picked by "pixel count x distance to the colours already chosen", so
-  small but distinct colours (text, lines) survive. When shrinking, every pixel takes one real
-  colour of its area (favouring thin details over the background) and nothing is dithered.
-  Palette PNGs offer Pixel art first.
+* Images with up to 4096 colours (logos, maps, pixel art) keep their **exact colours**. With more
+  colours than allowed, they are picked by "pixel count x distance to the colours already
+  chosen", so small but distinct colours (text, lines) survive. Without dithering, every shrunk
+  pixel takes one real colour of its area (favouring thin details over the background), so the
+  result stays crisp; with dithering, pixels are averaged and the exact colours dithered.
+* Photos (more colours) get a fitted palette: a median cut that always splits the colour group
+  with the largest error (so a big flat background can't use up the palette), plus k-means.
 
 With fewer colours, the spare palette slots stay free for drawing on top later (with an optimised
 palette they are filled with default colours that differ most from the image's). Transparent

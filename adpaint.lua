@@ -23,9 +23,7 @@ Usage:
        --height <n>   height (default: keep aspect)
    -c, --colours <n>  colours to use, 2-16 (16)
    -p, --palette <p>  optimised (default) or default
-   -x, --pixelart     pixel art / logo: exact source
-                      colours, no dithering
-   -n, --no-dither    photo without dithering
+   -n, --no-dither    don't dither
        --mode <m>     bars (default)/fill/stretch
                       when the aspect ratio changes
    -f, --force        overwrite out.adi
@@ -61,7 +59,7 @@ end
 ---------------------------------------------------------------------------
 local NUMBER_OPTS = { ["-w"] = true, ["--width"] = true, ["--height"] = true, ["-c"] = true,
                       ["--colours"] = true, ["--colors"] = true, ["-s"] = true }
-local CONVERT_OPTS = { "--width", "--height", "--colours", "--palette", "--pixelart", "--no-dither", "--mode", "--force" }
+local CONVERT_OPTS = { "--width", "--height", "--colours", "--palette", "--no-dither", "--mode", "--force" }
 
 local function completeArgs(sh, index, text, previous)
   local ok, c = pcall(require, "cc.shell.completion")
@@ -127,7 +125,6 @@ local function cliConvert(argv)
     elseif a == "-c" or a == "--colours" or a == "--colors" then opt.colours = tonumber(v) or 16; i = i + 2
     elseif a == "-p" or a == "--palette" then opt.optimise = (v or ""):sub(1, 1):lower() ~= "d"; i = i + 2
     elseif a == "-n" or a == "--no-dither" then opt.dither = false; i = i + 1
-    elseif a == "-x" or a == "--pixelart" then opt.pixelart = true; i = i + 1
     elseif a == "--mode" then
       opt.mode = (v or ""):lower()
       if opt.mode == "bars" then opt.mode = "fit" end -- "fit" still accepted
@@ -1490,14 +1487,13 @@ local function importData(name, data)
     mode, ax, ay = chooseScaleMode()
     if not mode then return end
   end
-  -- Photo: averaged colours + dithering. Pixel art (logos, maps, sprites):
-  -- the source's exact colours, never dithered. Palette PNGs are probably
-  -- pixel art, so that's offered first there (Enter picks it).
-  local kinds = { { "Photo", "photo" }, { "Pixel art", "pixel" } }
-  if info.indexed then kinds[1], kinds[2] = kinds[2], kinds[1] end
-  kinds[3] = { "Cancel", "c" }
-  local kind = choose("Image type:", kinds)
-  if kind ~= "photo" and kind ~= "pixel" then return end
+  -- Palette PNGs are usually pixel art / logos, which tend to look best
+  -- undithered, so "None" is offered first there (Enter picks it).
+  local opts = { { "Dither", true }, { "None", false } }
+  if info.indexed then opts[1], opts[2] = opts[2], opts[1] end
+  opts[3] = { "Cancel", "c" }
+  local dith = choose("Dithering:", opts)
+  if dith == nil or dith == "c" then return end
   local opt = choose("Palette:", { { "Optimised", true }, { "Default", false }, { "Cancel", "c" } })
   if opt == nil or opt == "c" then return end
   r = prompt("Colours to use (2-16): ", "16")
@@ -1505,7 +1501,7 @@ local function importData(name, data)
   local ncol = max(2, min(16, floor(tonumber(r) or 16)))
   busy("Importing...")
   local ok, img, ierr = pcall(convert.import, data, {
-    w = cw, h = ch, dither = kind == "photo", pixelart = kind == "pixel", optimise = opt, colours = ncol,
+    w = cw, h = ch, dither = dith, optimise = opt, colours = ncol,
     mode = mode, ax = ax, ay = ay,
     background = palette()[secondary],
     yield = yielder(),

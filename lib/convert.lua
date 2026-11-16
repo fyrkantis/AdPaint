@@ -53,7 +53,9 @@ end
 
 -- hist (optional table): filled with exact source colours -> pixel counts
 -- (stops counting past 4096 distinct colours: hist.overflow = true).
-local function resample(data, info, rw, rh, bg, yield, hist)
+-- crisp: when shrinking an image with few colours, give every target pixel
+-- one real source colour instead of an average (used when not dithering).
+local function resample(data, info, rw, rh, bg, yield, hist, crisp)
   local dec = require(DECODERS[info.format])
   local sw, sh = info.w, info.h
   local dcOnly = false
@@ -115,7 +117,7 @@ local function resample(data, info, rw, rh, bg, yield, hist)
   end
   -- pixel art while shrinking: remember which exact colours fall into each
   -- target pixel, so we can pick a real colour later instead of a blend
-  local areas = hist and sw >= rw and sh >= rh and {} or nil
+  local areas = crisp and hist and sw >= rw and sh >= rh and {} or nil
   local axmap
   if areas then
     axmap = {}
@@ -154,7 +156,7 @@ local function resample(data, info, rw, rh, bg, yield, hist)
           local v = hist[c]
           if not v then
             n = n + 1
-            if n > 4096 then hist.overflow = true; break end
+            if n > 4096 then hist.overflow = true; areas = nil; break end
             v = 0
           end
           hist[c] = v + 1
@@ -509,7 +511,6 @@ end
 -- opts: w, h (cells), dither (bool), optimise (bool: custom palette),
 --       colours (2..16, how many palette colours the image may use),
 --       mode ("stretch" (default), "fit" or "fill") with anchor ax, ay,
---       pixelart (bool: exact source colours, never dithered),
 --       background (0xRRGGBB used behind transparent pixels), yield, status(msg)
 function M.import(data, opts)
   local info, err = M.info(data)
@@ -524,8 +525,11 @@ function M.import(data, opts)
   if info.orientation >= 5 then rw, rh = dh, dw end
   local status = opts.status or function() end
   status("Decoding " .. info.format:upper() .. " " .. info.w .. "x" .. info.h .. "...")
-  local hist = opts.pixelart and {} or nil
-  local ok, R, G, B = pcall(resample, data, info, rw, rh, opts.background or 0xFFFFFF, opts.yield, hist)
+  -- Images with few colours (logos, pixel art, maps) keep their exact
+  -- colours; photos (more than 4096 colours) get a fitted palette instead.
+  local hist = {}
+  local ok, R, G, B = pcall(resample, data, info, rw, rh, opts.background or 0xFFFFFF, opts.yield, hist,
+                            not opts.dither)
   if not ok then return nil, tostring(R) end
   R, G, B = orient(R, G, B, rw, rh, info.orientation, dw, dh)
   if dw ~= tw or dh ~= th or ox ~= 0 or oy ~= 0 then
@@ -553,7 +557,7 @@ function M.import(data, opts)
   local k = math.max(2, math.min(16, opts.colours or 16))
   if opts.optimise then
     status("Optimising palette...")
-    if hist and not hist.overflow then
+    if not hist.overflow then
       custom, allowed = pixelArtPalette(hist, k)
     else
       custom, allowed = optimisePalette(R, G, B, tw * th, opts.yield, k)
@@ -568,7 +572,7 @@ function M.import(data, opts)
   end
   status("Quantising...")
   local img = adimg.new(cw, ch, 15)
-  img.px = quantise(R, G, B, cw, ch, palette, opts.dither and not opts.pixelart, opts.yield, allowed)
+  img.px = quantise(R, G, B, cw, ch, palette, opts.dither, opts.yield, allowed)
   img.palette = custom
   return img
 end
