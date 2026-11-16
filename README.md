@@ -2,7 +2,8 @@
 
 ```
 adpaint.lua        image editor: command line (help/setup/convert), then lib/editor
-adview.lua         shows .adi files on a monitor or the terminal (slideshows too)
+adview.lua         shows .adi files on numbered monitors and/or the terminal (slideshows,
+                   multi-image ads spread over several monitors)
 
 lib/adimg.lua      .adi file format: load/save/compose/draw (all a player needs)
 lib/convert.lua    PNG/JPEG/BMP -> .adi (resample, palette, 2-colour quantise, dither)
@@ -63,18 +64,35 @@ run once; `adpaint setup` adds one line to your startup so it's there after rebo
 
 ## Viewer (adview)
 ```
-adview <file|folder> ... [-m <side>] [--mode compromise|bars|fill] [-t <seconds>] [-o random|name]
+adview <file|folder> ... [-m <name>[=<n>],...] [-a] [-n] [--numbers 1,2,3,...] [--identify]
+                         [--mode compromise|bars|fill] [-t <seconds>] [-o random|name]
 adview setup | help
 ```
-* With `-m` the monitor's text scale is chosen automatically: **bars** uses the biggest scale at
-  which the whole image fits (bars in the image's edge colour around it), **fill** the smallest
-  scale at which the image covers the monitor (cropped, centred), and **compromise** (default)
-  whichever scale gives the least bars + cropping, with cropping counting double.
-* Several files or a folder become a slideshow: every image for `-t` seconds (default 10), in
-  random order (default, no repeats back to back) or by file name. The folder is re-read every
-  round, so new or edited images show up without restarting; Ctrl+T stops it. Put the command in
-  the computer's startup to run an ad board unattended.
-* A single image just stays on the monitor after adview exits (on the terminal, a key closes it).
+* **Displays** (found once, at start-up; default: the terminal): `-m <name>` adds a monitor
+  (`term` = the terminal), repeat it or separate names with commas. `-a` / `--adjacent` adds every
+  monitor touching the computer, `-n` / `--network` every monitor on wired modems (sorted by name,
+  so `monitor_2` comes before `monitor_10`). A display that is unplugged later is skipped.
+* **Numbers**: displays are numbered 1, 2, 3... in the order `-m`, adjacent, network. Give a
+  number with `-m top=2`, or number all of them in that order with `--numbers 1,2,3,1,2,3`
+  (numbers given with `-m` win). A display without one gets the next number after the highest
+  so far. Displays may share a number. `--identify` shows each display's number and name on
+  it until a key is pressed, to check the set-up.
+* **Ads**: every file given, and in every folder given each `.adi` file and each **subfolder**
+  (a multi-image ad). A subfolder's images are sorted by name: image 1 goes to display(s) 1,
+  image 2 to display(s) 2, and so on, starting over when there are more displays than images.
+  A single image ad shows on every display. Example for a platform with two rows of three
+  monitors that can't be seen at the same time:
+  `adview ads -a -n --numbers 1,2,3,1,2,3`.
+* Ads change every `-t` seconds (default 10), in random order (default, no repeats back to
+  back) or by name. Right after each delay the folders are looked at again, so ads can be added,
+  changed or removed by other programs while adview runs; unreadable files are skipped. With
+  nothing to show, every display says "No image". Ctrl+T stops (Q too, on the terminal).
+* Text scale per monitor: **bars** uses the biggest scale at which the whole image fits (bars in
+  the image's edge colour around it), **fill** the smallest scale at which the image covers the
+  monitor (cropped, centred), and **compromise** (default) whichever scale gives the least bars +
+  cropping, with cropping counting double.
+* A single image file just stays on the monitors after adview exits (on the terminal, a key
+  closes it). Put the command in the computer's startup to run an ad board unattended.
 * Tab completion for files, options, modes and monitors, like adpaint (`adview setup` makes it
   survive reboots). The old `adview <file> <monitor side>` form still works.
 
