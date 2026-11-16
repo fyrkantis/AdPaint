@@ -1,12 +1,33 @@
 # adpaint: images for CC: Tweaked advertisement screens
 
 ```
-adpaint.lua        image editor (advanced computer, or -m <side> for a monitor)
-adview.lua         shows an .adi on a monitor (picks the largest text scale that fits)
+adpaint.lua        image editor: command line (help/setup/convert), then lib/editor
+adview.lua         shows .adi files on a monitor or the terminal (slideshows too)
+
 lib/adimg.lua      .adi file format: load/save/compose/draw (all a player needs)
 lib/convert.lua    PNG/JPEG/BMP -> .adi (resample, palette, 2-colour quantise, dither)
 lib/png.lua  lib/inflate.lua  lib/jpeg.lua  lib/bmp.lua   decoders, pure Lua
-build.py           bundles each program + its libs into dist/ (release files)
+lib/paint.lua      drawing on images without any UI: brush, fill, line, 2-colour cell
+                   rule, canvas resize, scaling, text box geometry
+lib/history.lua    undo/redo for any document holding an adimg image
+lib/ui.lua         terminal UI toolkit: palette-proof colours, button rows, prompt,
+                   multiple choice, anchor picker, message (mouse and touch)
+lib/cli.lua        shell helpers: completion, "setup", yielding during long work
+
+lib/editor/        the editor, split by concern; each module adds its functions to
+                   one shared state table (see app.lua for the order):
+  app.lua          display set-up and main loop
+  state.lua        tabs/documents, tool settings, colours, undo glue
+  view.lua         zoom, panning, coordinates, drawing the canvas
+  text.lua         editing text boxes
+  chrome.lua       tab bar, tool settings, palette row, tool bar, menu, draw()
+  dialogs.lua      size/scale, colour editor, special characters, help
+  files.lua        open, import, save, close, quit, dropped files
+  commands.lua     menu entries and keyboard shortcuts
+  input.lua        mouse/touch/keys and event dispatch
+
+build.py           bundles each program + the modules it uses into dist/ (release files)
+tools/luamin.py    Lua minifier used by build.py --minify
 ```
 
 ## Install
@@ -16,7 +37,13 @@ libraries bundled in. Drag them onto the computer while it is running `import`.
 Alternatively keep the source layout (`adpaint.lua` next to a `lib/` folder).
 
 To make the bundles yourself, run `python3 build.py`; they are written to `dist/`
-(which is not committed).
+(which is not committed). Modules are found automatically (every `"lib.…"` string that names
+a file in `lib/`), so new modules need no build changes.
+
+`python3 build.py --minify` also writes minified bundles to `dist/min/` (about half the size:
+comments and whitespace removed, local variables renamed to short names; globals, table fields
+and strings are untouched, so they behave exactly like the normal bundles). Use the normal
+bundles when you want readable error messages.
 
 ## Command line
 ```

@@ -3,6 +3,7 @@
 -- Run "adview help" for usage.
 package.path = "/" .. fs.combine(fs.getDir(shell.getRunningProgram()), "?.lua") .. ";" .. package.path
 local adimg = require("lib.adimg")
+local cli = require("lib.cli")
 
 local floor = math.floor
 
@@ -32,8 +33,8 @@ local VALUE_OPTS = { ["-t"] = true, ["--time"] = true }
 local OPTS = { "--monitor", "--mode", "--time", "--order" }
 
 local function completeArgs(sh, index, text, previous)
-  local ok, c = pcall(require, "cc.shell.completion")
-  if not ok then return {} end
+  local c = cli.completion()
+  if not c then return {} end
   local prev = previous[#previous]
   if VALUE_OPTS[prev] then return {} end
   if prev == "-m" or prev == "--monitor" then return c.peripheral(sh, text, previous, true) end
@@ -41,39 +42,13 @@ local function completeArgs(sh, index, text, previous)
   if prev == "-o" or prev == "--order" then return c.choice(sh, text, previous, { "random", "name" }, true) end
   if text:sub(1, 1) == "-" then return c.choice(sh, text, previous, OPTS, true) end
   local out = {}
-  if index == 1 then
-    for _, v in ipairs(c.choice(sh, text, previous, { "help", "setup" }, true)) do out[#out + 1] = v end
-  end
-  for _, v in ipairs(c.dirOrFile(sh, text, previous, true)) do out[#out + 1] = v end
-  return out
+  if index == 1 then cli.addChoices(out, c.choice(sh, text, previous, { "help", "setup" }, true)) end
+  return cli.addChoices(out, c.dirOrFile(sh, text, previous, true))
 end
+cli.registerCompletion(completeArgs)
 
-if shell.setCompletionFunction then
-  shell.setCompletionFunction(shell.getRunningProgram(), completeArgs)
-end
-
-local SETUP_MARK = "-- adview: filename completion"
 local function setup()
-  local line = ("shell.run(%q, \"--register\") %s"):format("/" .. shell.getRunningProgram(), SETUP_MARK)
-  local target
-  for _, f in ipairs({ "/startup.lua", "/startup" }) do
-    if fs.exists(f) and not fs.isDir(f) then target = f; break end
-  end
-  if target then
-    local h = fs.open(target, "r")
-    local content = h.readAll() or ""
-    h.close()
-    if content:find(SETUP_MARK, 1, true) then print("Already set up in " .. target); return end
-    h = fs.open(target, "a")
-    h.write((content:sub(-1) == "\n" or content == "") and line .. "\n" or "\n" .. line .. "\n")
-    h.close()
-  else
-    target = "/startup/adview-complete.lua"
-    local h = fs.open(target, "w")
-    h.write(line .. "\n")
-    h.close()
-  end
-  print("Added completion to " .. target .. ".")
+  cli.setup("-- adview: filename completion", "/startup/adview-complete.lua")
 end
 
 ---------------------------------------------------------------------------
@@ -81,7 +56,7 @@ end
 ---------------------------------------------------------------------------
 local args = { ... }
 if args[1] == "--register" then return end
-if #args == 0 or args[1] == "help" or args[1] == "-h" or args[1] == "--help" or args[1] == "-?" then
+if #args == 0 or cli.isHelp(args[1]) then
   textutils.pagedPrint(USAGE)
   return
 end
