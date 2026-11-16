@@ -32,7 +32,8 @@ function M.info(data)
   if not list then return nil, err end
   local c = list[1]
   if not c or c[1] ~= "IHDR" then return nil, "PNG: missing IHDR" end
-  return u32(data, c[2]), u32(data, c[2] + 4)
+  -- colour type 3 = palette image: most likely pixel art / a logo
+  return u32(data, c[2]), u32(data, c[2] + 4), { indexed = data:byte(c[2] + 9) == 3 }
 end
 
 local CHANNELS = { [0] = 1, [2] = 3, [3] = 1, [4] = 2, [6] = 4 }

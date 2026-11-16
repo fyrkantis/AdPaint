@@ -29,7 +29,8 @@ function M.info(data)
   local dec = require(DECODERS[fmt])
   local w, h, extra = dec.info(data)
   if not w then return nil, h end
-  local info = { format = fmt, w = w, h = h, orientation = extra and extra.orientation or 1 }
+  local info = { format = fmt, w = w, h = h, orientation = extra and extra.orientation or 1,
+                 indexed = extra and extra.indexed or false }
   if info.orientation >= 5 then info.dw, info.dh = h, w else info.dw, info.dh = w, h end
   return info
 end
@@ -50,7 +51,9 @@ end
 -- Resampling
 ---------------------------------------------------------------------------
 
-local function resample(data, info, rw, rh, bg, yield)
+-- hist (optional table): filled with exact source colours -> pixel counts
+-- (stops counting past 4096 distinct colours: hist.overflow = true).
+local function resample(data, info, rw, rh, bg, yield, hist)
   local dec = require(DECODERS[info.format])
   local sw, sh = info.w, info.h
   local dcOnly = false
@@ -110,11 +113,79 @@ local function resample(data, info, rw, rh, bg, yield)
       end
     end
   end
+  -- pixel art while shrinking: remember which exact colours fall into each
+  -- target pixel, so we can pick a real colour later instead of a blend
+  local areas = hist and sw >= rw and sh >= rh and {} or nil
+  local axmap
+  if areas then
+    axmap = {}
+    for x = 1, sw do axmap[x] = floor((x - 1) * rw / sw) + 1 end
+  end
+  if hist then
+    local inner, n = onRow, 0
+    onRow = function(y, r, g, b, a)
+      if areas and y < sh then
+        local base = floor(y * rh / sh) * rw
+        for x = 1, #r do
+          local al = a[x]
+          local c
+          if al == 255 then c = r[x] * 65536 + g[x] * 256 + b[x]
+          else
+            local f = al / 255
+            c = floor(r[x] * f + bgr * (1 - f) + 0.5) * 65536 + floor(g[x] * f + bgg * (1 - f) + 0.5) * 256
+              + floor(b[x] * f + bgb * (1 - f) + 0.5)
+          end
+          local i = base + axmap[x]
+          local t = areas[i]
+          if not t then t = {}; areas[i] = t end
+          t[c] = (t[c] or 0) + 1
+        end
+      end
+      if not hist.overflow then
+        for x = 1, #r do
+          local al = a[x]
+          local c
+          if al == 255 then c = r[x] * 65536 + g[x] * 256 + b[x]
+          else
+            local f = al / 255
+            c = floor(r[x] * f + bgr * (1 - f) + 0.5) * 65536 + floor(g[x] * f + bgg * (1 - f) + 0.5) * 256
+              + floor(b[x] * f + bgb * (1 - f) + 0.5)
+          end
+          local v = hist[c]
+          if not v then
+            n = n + 1
+            if n > 4096 then hist.overflow = true; break end
+            v = 0
+          end
+          hist[c] = v + 1
+        end
+      end
+      inner(y, r, g, b, a)
+    end
+  end
   dec.decode(data, onRow, yield, dcOnly)
   for i = 1, rw * rh do
     local n = N[i]
     if n > 0 then R[i], G[i], B[i] = R[i] / n, G[i] / n, B[i] / n
     else R[i], G[i], B[i] = bgr, bgg, bgb end
+  end
+  if areas and not hist.overflow then
+    -- each target pixel takes one exact source colour: of the colours
+    -- covering at least a quarter of its area, the one that is rarest in
+    -- the whole image (thin lines and text beat the background)
+    for i = 1, rw * rh do
+      local t = areas[i]
+      if t then
+        local total, best, bestN, top, topN = 0, nil, math.huge, nil, -1
+        for _, cnt in pairs(t) do total = total + cnt end
+        for c, cnt in pairs(t) do
+          if cnt > topN then top, topN = c, cnt end
+          if cnt * 4 >= total and hist[c] < bestN then best, bestN = c, hist[c] end
+        end
+        local c = best or top
+        R[i], G[i], B[i] = adimg.rgb(c)
+      end
+    end
   end
   return R, G, B
 end
@@ -194,78 +265,16 @@ local function defaultSubset(R, G, B, n, k, yield)
   return chosen
 end
 
--- Builds a custom palette with k colours fitted to the image (median cut +
--- k-means). The image colours go in slots 0..k-1 (bright -> dark); spare
--- slots are filled with default colours that differ most from them, so
--- there is something left to draw with.
-local function optimisePalette(R, G, B, n, yield, k)
-  k = k or 16
-  local pts = samplePoints(R, G, B, n, 12000)
-  local boxes = { { 1, #pts } }
-  while #boxes < k do
-    -- pick the box with the largest channel range
-    local best, bestRange, bestCh = nil, -1, 1
-    for bi, bx in ipairs(boxes) do
-      if bx[2] > bx[1] then
-        for ch = 1, 3 do
-          local lo, hi = 256, -1
-          for i = bx[1], bx[2] do
-            local v = pts[i][ch]
-            if v < lo then lo = v end
-            if v > hi then hi = v end
-          end
-          local w = (hi - lo) * (ch == 2 and 1.2 or 1)
-          if w > bestRange then best, bestRange, bestCh = bi, w, ch end
-        end
-      end
-    end
-    if not best or bestRange <= 0 then break end
-    local bx = boxes[best]
-    local tmp = {}
-    for i = bx[1], bx[2] do tmp[#tmp + 1] = pts[i] end
-    table.sort(tmp, function(a, b) return a[bestCh] < b[bestCh] end)
-    for i = 1, #tmp do pts[bx[1] + i - 1] = tmp[i] end
-    local mid = bx[1] + floor(#tmp / 2) - 1
-    boxes[best] = { bx[1], mid }
-    boxes[#boxes + 1] = { mid + 1, bx[2] }
-    if yield then yield() end
-  end
-  local cen = {}
-  for _, bx in ipairs(boxes) do
-    local r, g, b = 0, 0, 0
-    for i = bx[1], bx[2] do r = r + pts[i][1]; g = g + pts[i][2]; b = b + pts[i][3] end
-    local c = bx[2] - bx[1] + 1
-    cen[#cen + 1] = { r / c, g / c, b / c }
-  end
-  -- k-means refinement
-  for _ = 1, 4 do
-    local sum = {}
-    for k = 1, #cen do sum[k] = { 0, 0, 0, 0 } end
-    for i = 1, #pts do
-      local p = pts[i]
-      local bk, bd = 1, math.huge
-      for k = 1, #cen do
-        local c = cen[k]
-        local dr, dg, db = p[1] - c[1], p[2] - c[2], p[3] - c[3]
-        local d = 2 * dr * dr + 4 * dg * dg + 3 * db * db
-        if d < bd then bk, bd = k, d end
-      end
-      local s = sum[bk]
-      s[1], s[2], s[3], s[4] = s[1] + p[1], s[2] + p[2], s[3] + p[3], s[4] + 1
-      if i % 2000 == 0 and yield then yield() end
-    end
-    for k = 1, #cen do
-      local s = sum[k]
-      if s[4] > 0 then cen[k] = { s[1] / s[4], s[2] / s[4], s[3] / s[4] } end
-    end
-  end
-  local cols = {}
-  for i, c in ipairs(cen) do
-    cols[i] = floor(c[1] + 0.5) * 65536 + floor(c[2] + 0.5) * 256 + floor(c[3] + 0.5)
-  end
+-- Turns a list of chosen 0xRRGGBB colours into a 16 slot palette: the
+-- colours (bright -> dark) in slots 0..n-1, spare slots filled with default
+-- colours that differ most from them (so there is something left to draw
+-- with). Returns palette, allowed (the slots the image may use).
+local function finishPalette(cols)
+  local seen, uniq = {}, {}
+  for _, c in ipairs(cols) do if not seen[c] then seen[c] = true; uniq[#uniq + 1] = c end end
+  cols = uniq
   table.sort(cols, function(a, b) return luma(a) > luma(b) end)
-  local used = #cols -- may be < k for images with few colours
-  -- spare slots: default colours furthest from everything chosen so far
+  local used = #cols
   local spare, taken = {}, {}
   while #cols + #spare < 16 do
     local bc, bd = nil, -1
@@ -288,6 +297,115 @@ local function optimisePalette(R, G, B, n, yield, k)
     if i <= used then allowed[i] = i - 1 end
   end
   return pal, allowed
+end
+
+-- Builds a custom palette with k colours fitted to the image: median cut
+-- that always splits the box with the largest total squared error (so a
+-- big flat background doesn't eat all the colours), then weighted k-means.
+local function optimisePalette(R, G, B, n, yield, k)
+  k = k or 16
+  local pts = samplePoints(R, G, B, n, 12000)
+  local function boxStats(b)
+    local sr, sg, sb, c = 0, 0, 0, b[2] - b[1] + 1
+    for i = b[1], b[2] do local p = pts[i]; sr, sg, sb = sr + p[1], sg + p[2], sb + p[3] end
+    local mr, mg, mb = sr / c, sg / c, sb / c
+    local vr, vg, vb = 0, 0, 0
+    for i = b[1], b[2] do
+      local p = pts[i]
+      vr, vg, vb = vr + (p[1] - mr) ^ 2, vg + (p[2] - mg) ^ 2, vb + (p[3] - mb) ^ 2
+    end
+    vr, vg, vb = vr * 2, vg * 4, vb * 3 -- same weights as the colour distance
+    b.err = vr + vg + vb
+    b.ch = (vr >= vg and vr >= vb) and 1 or (vg >= vb and 2 or 3)
+    b.mean = { mr, mg, mb }
+  end
+  local boxes = { { 1, #pts } }
+  boxStats(boxes[1])
+  while #boxes < k do
+    local best
+    for bi, bx in ipairs(boxes) do
+      if bx[2] > bx[1] and bx.err > 0 and (not best or bx.err > boxes[best].err) then best = bi end
+    end
+    if not best then break end
+    local bx = boxes[best]
+    local ch = bx.ch
+    local tmp = {}
+    for i = bx[1], bx[2] do tmp[#tmp + 1] = pts[i] end
+    table.sort(tmp, function(a, b) return a[ch] < b[ch] end)
+    for i = 1, #tmp do pts[bx[1] + i - 1] = tmp[i] end
+    -- split at the mean (not the median), so a small distinct group gets
+    -- its own box instead of being cut in half
+    local mean, cut = bx.mean[ch], bx[1]
+    while cut < bx[2] - 1 and pts[cut + 1][ch] <= mean do cut = cut + 1 end
+    if cut >= bx[2] then cut = bx[2] - 1 end
+    local a, b = { bx[1], cut }, { cut + 1, bx[2] }
+    boxStats(a); boxStats(b)
+    boxes[best] = a
+    boxes[#boxes + 1] = b
+    if yield then yield() end
+  end
+  local cen = {}
+  for _, bx in ipairs(boxes) do cen[#cen + 1] = { bx.mean[1], bx.mean[2], bx.mean[3] } end
+  -- k-means refinement; a centre that loses all its points jumps to the
+  -- point that is currently worst represented
+  for _ = 1, 4 do
+    local sum, worst, worstD = {}, nil, -1
+    for c = 1, #cen do sum[c] = { 0, 0, 0, 0 } end
+    for i = 1, #pts do
+      local p = pts[i]
+      local bk, bd = 1, math.huge
+      for c = 1, #cen do
+        local q = cen[c]
+        local d = pdist(p[1], p[2], p[3], q[1], q[2], q[3])
+        if d < bd then bk, bd = c, d end
+      end
+      if bd > worstD then worst, worstD = p, bd end
+      local s4 = sum[bk]
+      s4[1], s4[2], s4[3], s4[4] = s4[1] + p[1], s4[2] + p[2], s4[3] + p[3], s4[4] + 1
+      if i % 2000 == 0 and yield then yield() end
+    end
+    for c = 1, #cen do
+      local s4 = sum[c]
+      if s4[4] > 0 then cen[c] = { s4[1] / s4[4], s4[2] / s4[4], s4[3] / s4[4] }
+      elseif worst then cen[c] = { worst[1], worst[2], worst[3] }; worst = nil end
+    end
+  end
+  local cols = {}
+  for i, c in ipairs(cen) do
+    cols[i] = floor(c[1] + 0.5) * 65536 + floor(c[2] + 0.5) * 256 + floor(c[3] + 0.5)
+  end
+  return finishPalette(cols)
+end
+
+-- Pixel art / logos: use the source's exact colours. If there are more
+-- than k, pick them weighted farthest-first: start with the most common
+-- colour, then repeatedly add the colour with the largest
+-- (pixel count x distance to everything chosen so far).
+local function pixelArtPalette(hist, k)
+  local list = {}
+  for c, n in pairs(hist) do if type(c) == "number" then list[#list + 1] = { c, n } end end
+  table.sort(list, function(a, b) return a[2] > b[2] end)
+  local cols = {}
+  if #list <= k then
+    for i, e in ipairs(list) do cols[i] = e[1] end
+  else
+    local minD = {}
+    for i = 1, #list do minD[i] = math.huge end
+    local pickI = 1
+    while #cols < k do
+      cols[#cols + 1] = list[pickI][1]
+      local bestI, bestS = nil, -1
+      for i, e in ipairs(list) do
+        local d = adimg.dist(e[1], list[pickI][1])
+        if d < minD[i] then minD[i] = d end
+        local sc = e[2] * math.sqrt(minD[i])
+        if sc > bestS then bestI, bestS = i, sc end
+      end
+      if not bestI or bestS <= 0 then break end
+      pickI = bestI
+    end
+  end
+  return finishPalette(cols)
 end
 
 ---------------------------------------------------------------------------
@@ -391,6 +509,7 @@ end
 -- opts: w, h (cells), dither (bool), optimise (bool: custom palette),
 --       colours (2..16, how many palette colours the image may use),
 --       mode ("stretch" (default), "fit" or "fill") with anchor ax, ay,
+--       pixelart (bool: exact source colours, never dithered),
 --       background (0xRRGGBB used behind transparent pixels), yield, status(msg)
 function M.import(data, opts)
   local info, err = M.info(data)
@@ -405,7 +524,8 @@ function M.import(data, opts)
   if info.orientation >= 5 then rw, rh = dh, dw end
   local status = opts.status or function() end
   status("Decoding " .. info.format:upper() .. " " .. info.w .. "x" .. info.h .. "...")
-  local ok, R, G, B = pcall(resample, data, info, rw, rh, opts.background or 0xFFFFFF, opts.yield)
+  local hist = opts.pixelart and {} or nil
+  local ok, R, G, B = pcall(resample, data, info, rw, rh, opts.background or 0xFFFFFF, opts.yield, hist)
   if not ok then return nil, tostring(R) end
   R, G, B = orient(R, G, B, rw, rh, info.orientation, dw, dh)
   if dw ~= tw or dh ~= th or ox ~= 0 or oy ~= 0 then
@@ -433,7 +553,11 @@ function M.import(data, opts)
   local k = math.max(2, math.min(16, opts.colours or 16))
   if opts.optimise then
     status("Optimising palette...")
-    custom, allowed = optimisePalette(R, G, B, tw * th, opts.yield, k)
+    if hist and not hist.overflow then
+      custom, allowed = pixelArtPalette(hist, k)
+    else
+      custom, allowed = optimisePalette(R, G, B, tw * th, opts.yield, k)
+    end
     palette = custom
   elseif k < 16 then
     status("Choosing colours...")
@@ -444,7 +568,7 @@ function M.import(data, opts)
   end
   status("Quantising...")
   local img = adimg.new(cw, ch, 15)
-  img.px = quantise(R, G, B, cw, ch, palette, opts.dither, opts.yield, allowed)
+  img.px = quantise(R, G, B, cw, ch, palette, opts.dither and not opts.pixelart, opts.yield, allowed)
   img.palette = custom
   return img
 end
