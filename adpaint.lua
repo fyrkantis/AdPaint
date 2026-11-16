@@ -930,7 +930,7 @@ local function pickLayout(...)
 end
 
 local TOOLS = { -- name, label, icon (CC font characters)
-  { "brush", "Brush", "\7" }, { "fill", "Fill", "\8" }, { "text", "Text", "\20" },
+  { "brush", "Brush", "\7" }, { "fill", "Fill", "\21" }, { "text", "Text", "\20" },
   { "pick", "Pick", "\35" }, { "pan", "Pan", "\18" },
 }
 
