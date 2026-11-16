@@ -15,7 +15,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "tools"))
-import luamin  # noqa: E402
+import luamin  # type: ignore
 
 PROGRAMS = ["adpaint.lua", "adview.lua"]
 MODULE_RE = re.compile(r"""["'](lib(?:\.[A-Za-z_][A-Za-z0-9_]*)+)["']""")
