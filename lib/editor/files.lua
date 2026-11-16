@@ -1,6 +1,6 @@
 -- Editor file handling: open, import (with its questions), save, close
 -- tabs, quit, and files dropped onto the window.
-local adimg = require("lib.adimg")
+local adimg = require("lib.formats.adimg")
 local cli = require("lib.cli")
 
 local floor, max, min = math.floor, math.max, math.min

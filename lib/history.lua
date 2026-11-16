@@ -5,7 +5,7 @@
 -- value of every pixel it changes (plus, optionally, the old text layer or
 -- a snapshot of the whole image). Undoing swaps old and current state, so
 -- applying an operation twice is a no-op and undo/redo are the same swap.
-local adimg = require("lib.adimg")
+local adimg = require("lib.formats.adimg")
 
 local M = {}
 

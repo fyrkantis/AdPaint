@@ -64,7 +64,7 @@ local function setup()
 end
 
 local function cliConvert(argv)
-  local opt = { colours = 16, optimise = true, dither = true, mode = "fit" }
+  local opt = {}
   local input, output, force
   local i = 1
   while i <= #argv do
@@ -72,7 +72,7 @@ local function cliConvert(argv)
     local v = argv[i + 1]
     if a == "-w" or a == "--width" then opt.w = tonumber(v); i = i + 2
     elseif a == "--height" then opt.h = tonumber(v); i = i + 2
-    elseif a == "-c" or a == "--colours" or a == "--colors" then opt.colours = tonumber(v) or 16; i = i + 2
+    elseif a == "-c" or a == "--colours" or a == "--colors" then opt.colours = tonumber(v); i = i + 2
     elseif a == "-p" or a == "--palette" then opt.optimise = (v or ""):sub(1, 1):lower() ~= "d"; i = i + 2
     elseif a == "-n" or a == "--no-dither" then opt.dither = false; i = i + 1
     elseif a == "--mode" then
@@ -97,26 +97,12 @@ local function cliConvert(argv)
     local r = read()
     if not r or r:lower():sub(1, 1) ~= "y" then return end
   end
-  local data = cli.readFile(inPath) or ""
   local convert = require("lib.convert")
-  local adimg = require("lib.adimg")
-  local info, err = convert.info(data)
-  if not info then printError(input .. ": " .. tostring(err)); return end
-  for _, k in ipairs({ "w", "h" }) do
-    if opt[k] then opt[k] = math.max(1, math.min(512, math.floor(opt[k]))) end
-  end
-  if not opt.w and not opt.h then
-    local tw, th = term.getSize()
-    opt.w, opt.h = convert.fitCells(info, tw, th)
-  elseif opt.h and not opt.w then
-    opt.w = math.max(1, math.floor(opt.h * 3 * info.dw / info.dh / 2 + 0.5))
-  end
-  opt.colours = math.max(2, math.min(16, math.floor(opt.colours)))
+  local adimg = require("lib.formats.adimg")
   opt.yield = cli.yielder()
   opt.status = print
-  local ok, img, ierr = pcall(convert.import, data, opt)
-  if not ok then ierr = img; img = nil end
-  if not img then printError("Conversion failed: " .. tostring(ierr)); return end
+  local img, err = convert.convertFile(inPath, opt)
+  if not img then printError(input .. ": " .. tostring(err)); return end
   local sok, serr = adimg.save(img, output)
   if not sok then printError("Save failed: " .. tostring(serr)); return end
   print(("Saved %s (%dx%d cells)"):format(output, img.w, img.h))

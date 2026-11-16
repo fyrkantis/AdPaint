@@ -1,7 +1,7 @@
 -- Editor state: documents (tabs), tool settings, colours, undo glue.
 -- Every lib/editor module is installed into one shared table `ed`, which
 -- holds the editor's state and the functions modules call on each other.
-local adimg = require("lib.adimg")
+local adimg = require("lib.formats.adimg")
 local history = require("lib.history")
 
 return function(ed)

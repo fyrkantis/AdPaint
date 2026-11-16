@@ -1,7 +1,8 @@
 -- Editor dialogs: canvas size / image scale, colour editor, special
 -- character picker, palette reset, text scale, new canvas, help.
-local adimg = require("lib.adimg")
+local adimg = require("lib.formats.adimg")
 local paint = require("lib.paint")
+local displays = require("lib.displays")
 
 local floor, max, min = math.floor, math.max, math.min
 
@@ -331,13 +332,8 @@ return function(ed)
   -- Sets the largest text scale up to `want` (0.5-5, in steps of 0.5) at
   -- which the screen still fits; returns it.
   function ed.fitTextScale(want)
-    local mon = ed.display
-    local sc = max(0.5, min(5, floor(want * 2 + 0.5) / 2))
-    while true do
-      if mon.getTextScale() ~= sc then mon.setTextScale(sc) end
-      if sc <= 0.5 or ed.screenFits() then break end
-      sc = sc - 0.5
-    end
+    local minW = ed.minScreenWidth()
+    local sc = displays.fitScale(ed.display, want, function(w, h) return w >= minW and h >= MIN_ROWS end)
     ed.onResize()
     return sc
   end

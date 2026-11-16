@@ -1,10 +1,10 @@
--- paint: editing operations on adimg images (see lib/adimg.lua), with no
+-- paint: editing operations on adimg images (see lib/formats/adimg.lua), with no
 -- user interface or editor state, so other programs can draw on images too.
 --
 -- Functions that change pixels take an optional `set(img, i, c)` used for
 -- every write (i = index into img.px); the editor passes one that records
 -- undo information. Without it pixels are written directly.
-local adimg = require("lib.adimg")
+local adimg = require("lib.formats.adimg")
 
 local M = {}
 local floor, max, min = math.floor, math.max, math.min

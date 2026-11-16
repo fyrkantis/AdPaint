@@ -3,7 +3,7 @@
 --
 -- Rows: 1 tabs, 2..H-3 canvas, H-2 tool settings, H-1 palette, H tools.
 -- Hit boxes of what was drawn are kept in ed.hits for the input code.
-local adimg = require("lib.adimg")
+local adimg = require("lib.formats.adimg")
 
 local max, min = math.max, math.min
 

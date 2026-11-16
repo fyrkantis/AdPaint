@@ -5,14 +5,21 @@ adpaint.lua        image editor: command line (help/setup/convert), then lib/edi
 adview.lua         shows .adi files on numbered monitors and/or the terminal (slideshows,
                    multi-image ads spread over several monitors)
 
-lib/adimg.lua      .adi file format: load/save/compose/draw (all a player needs)
-lib/convert.lua    PNG/JPEG/BMP -> .adi (resample, palette, 2-colour quantise, dither)
-lib/png.lua  lib/inflate.lua  lib/jpeg.lua  lib/bmp.lua   decoders, pure Lua
+lib/formats/       image file formats
+  adimg.lua        .adi file format: load/save/compose/draw (all a player needs)
+  decode.lua       one entry point for the decoders: detect, info, decode rows
+  png.lua  inflate.lua  jpeg.lua  bmp.lua   PNG/JPEG/BMP decoders, pure Lua
+lib/convert.lua    PNG/JPEG/BMP -> .adi (resample, palette, 2-colour quantise, dither),
+                   convertFile() = what "adpaint convert" does
+lib/displays.lua   monitors: find (by name, adjacent, network), number, text scales,
+                   draw an image centred with bars, centred text, "No image"
+lib/render.lua     pan/zoom view of an image (native teletext or zoomed pixels) into
+                   blit rows, plus screen <-> image coordinates
 lib/paint.lua      drawing on images without any UI: brush, fill, line, 2-colour cell
                    rule, canvas resize, scaling, text box geometry
 lib/history.lua    undo/redo for any document holding an adimg image
 lib/ui.lua         terminal UI toolkit: palette-proof colours, button rows, prompt,
-                   multiple choice, anchor picker, message (mouse and touch)
+                   multiple choice, anchor picker, scrolling message (mouse and touch)
 lib/cli.lua        shell helpers: completion, "setup", yielding during long work
 
 lib/editor/        the editor, split by concern; each module adds its functions to
@@ -29,6 +36,23 @@ lib/editor/        the editor, split by concern; each module adds its functions 
 
 build.py           bundles each program + the modules it uses into dist/ (release files)
 tools/luamin.py    Lua minifier used by build.py --minify
+```
+
+## Writing your own programs
+The modules in `lib/` don't depend on the editor, so other programs can use them (put the
+program next to `lib/` and add it to `PROGRAMS` in build.py to get a bundle). For example, a
+program that converts a dropped image and shows it on every monitor around the computer:
+```lua
+package.path = "/" .. fs.combine(fs.getDir(shell.getRunningProgram()), "?.lua") .. ";" .. package.path
+local adimg = require("lib.formats.adimg")
+local convert = require("lib.convert")
+local displays = require("lib.displays")
+
+local img = assert(convert.convertFile("photo.jpg", { w = 60 }))
+adimg.save(img, "photo.adi")
+local list = assert(displays.find({ adjacent = true }))
+displays.number(list)
+for _, d in ipairs(list) do displays.drawImage(d, img, "bars") end
 ```
 
 ## Install

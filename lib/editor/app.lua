@@ -1,6 +1,6 @@
 -- The adpaint editor: sets up the display, installs the editor modules into
 -- one shared state table and runs the main loop.
-local adimg = require("lib.adimg")
+local adimg = require("lib.formats.adimg")
 local ui = require("lib.ui")
 
 local M = {}

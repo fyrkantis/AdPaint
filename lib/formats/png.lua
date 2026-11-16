@@ -2,7 +2,7 @@
 -- png.info(data) -> width, height | nil, err
 -- png.decode(data, onRow, yield)  calls onRow(y, r, g, b, a) for each image
 --   row (0-based y; r/g/b/a are 1-based arrays of 0..255).
-local inflate = require("lib.inflate")
+local inflate = require("lib.formats.inflate")
 
 local M = {}
 local byte, floor = string.byte, math.floor

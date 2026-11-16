@@ -1,39 +1,16 @@
 -- Converts PNG / JPEG / BMP files into adimg images: decode -> resample to
 -- the 2x3 pixel grid -> (optionally) optimise a 16 colour palette ->
 -- quantise with the "two colours per cell" constraint (+ optional dithering).
-local adimg = require("lib.adimg")
+local adimg = require("lib.formats.adimg")
+local decode = require("lib.formats.decode")
 
 local M = {}
-local floor, byte = math.floor, string.byte
+local floor = math.floor
 
-local DECODERS = {
-  png = "lib.png", jpeg = "lib.jpeg", bmp = "lib.bmp",
-}
-
--- Detects a file type from its first bytes.
-function M.detect(data)
-  if data:sub(1, 8) == "\137PNG\r\n\26\n" then return "png" end
-  if byte(data, 1) == 0xFF and byte(data, 2) == 0xD8 then return "jpeg" end
-  if data:sub(1, 2) == "BM" then return "bmp" end
-  if data:sub(1, 6) == "ADIMG " then return "adimg" end
-  if data:sub(1, 4) == "RIFF" and data:sub(9, 12) == "WEBP" then return "webp" end
-  if data:sub(1, 3) == "GIF" then return "gif" end
-  return nil
-end
-
--- Returns info table {format, w, h, orientation} or nil, err.
-function M.info(data)
-  local fmt = M.detect(data)
-  if not fmt then return nil, "unknown file format" end
-  if not DECODERS[fmt] then return nil, fmt:upper() .. " files are not supported" end
-  local dec = require(DECODERS[fmt])
-  local w, h, extra = dec.info(data)
-  if not w then return nil, h end
-  local info = { format = fmt, w = w, h = h, orientation = extra and extra.orientation or 1,
-                 indexed = extra and extra.indexed or false }
-  if info.orientation >= 5 then info.dw, info.dh = h, w else info.dw, info.dh = w, h end
-  return info
-end
+-- Format detection and file info live in lib/formats/decode.lua; they are
+-- re-exported here because callers usually want them together with import.
+M.detect = decode.detect
+M.info = decode.info
 
 -- Suggests a cell size that fits maxW x maxH cells while keeping the aspect
 -- ratio (a cell is 2x3 pixels, so pixels stay square).
@@ -56,7 +33,7 @@ end
 -- crisp: when shrinking an image with few colours, give every target pixel
 -- one real source colour instead of an average (used when not dithering).
 local function resample(data, info, rw, rh, bg, yield, hist, crisp)
-  local dec = require(DECODERS[info.format])
+  local dec = decode.decoder(info.format)
   local sw, sh = info.w, info.h
   local dcOnly = false
   if info.format == "jpeg" and math.ceil(sw / 8) >= rw and math.ceil(sh / 8) >= rh then
@@ -574,6 +551,37 @@ function M.import(data, opts)
   local img = adimg.new(cw, ch, 15)
   img.px = quantise(R, G, B, cw, ch, palette, opts.dither, opts.yield, allowed)
   img.palette = custom
+  return img
+end
+
+-- Converts an image file into an adimg image with the same defaults as
+-- "adpaint convert" (16 colours, optimised palette, dithering, bars when
+-- the aspect ratio changes). opts as for M.import, plus: w and/or h may be
+-- left out (h alone keeps the aspect ratio; neither fits fitW x fitH, by
+-- default the terminal). Sizes are limited to 1..512 cells.
+-- Returns img or nil, error.
+function M.convertFile(path, opts)
+  local o = { colours = 16, optimise = true, dither = true, mode = "fit" }
+  for k, v in pairs(opts or {}) do o[k] = v end
+  local f = fs.open(path, "rb")
+  if not f then return nil, "Cannot read " .. path end
+  local data = f.readAll() or ""
+  f.close()
+  local info, err = M.info(data)
+  if not info then return nil, err end
+  for _, k in ipairs({ "w", "h" }) do
+    if o[k] then o[k] = math.max(1, math.min(512, floor(o[k]))) end
+  end
+  if not o.w and not o.h then
+    local tw, th = term.getSize()
+    o.w, o.h = M.fitCells(info, o.fitW or tw, o.fitH or th)
+  elseif o.h and not o.w then
+    o.w = math.max(1, floor(o.h * 3 * info.dw / info.dh / 2 + 0.5))
+  end
+  o.colours = math.max(2, math.min(16, floor(o.colours)))
+  local ok, img, ierr = pcall(M.import, data, o)
+  if not ok then return nil, tostring(img) end
+  if not img then return nil, tostring(ierr) end
   return img
 end
 

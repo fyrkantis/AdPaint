@@ -1,6 +1,6 @@
 -- Editor input: mouse / touch on the canvas and the bars, keys, and the
 -- dispatch of one event from the main loop.
-local adimg = require("lib.adimg")
+local adimg = require("lib.formats.adimg")
 local paint = require("lib.paint")
 
 local floor, min = math.floor, math.min
