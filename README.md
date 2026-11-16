@@ -119,7 +119,11 @@ adview setup | help
   decides which colour a tap picks (also for Pick), the Pan tool scrolls the tapped spot to the
   middle, and text boxes move with the arrows. The text scale comes from `-s <scale>`, else the
   setting `adpaint.text_scale` (default 0.5); "Text scale..." in the menu changes it and saves it
-  as that setting (or run `set adpaint.text_scale 1` in the shell).
+  as that setting (or run `set adpaint.text_scale 1` in the shell). A scale so big that the
+  tool settings (Size / Dither) would be cut off is lowered to the largest that fits, also when
+  the monitor is made smaller.
+* **Help** (in the menu) scrolls: More / Space move a third of a screen, Up/Down a line, the
+  scroll wheel and Page Up/Down work too. It closes with Close, Enter, Q or Backspace.
 * When a paint would give a cell a third colour, the cell keeps the new colour plus its most
   common other colour, and any remaining pixels snap to whichever of those two is nearer.
 

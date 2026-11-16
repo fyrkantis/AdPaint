@@ -132,6 +132,12 @@ return function(ed)
     return { { name, nil, false, 0 }, { "-", dec, false, 0 }, { tostring(val), nil, false, 0 }, { "+", inc } }
   end
 
+  -- The narrowest screen on which the brush settings (Size and Dither at
+  -- their widest values) fit without being cut off.
+  function ed.minScreenWidth()
+    return U.rowWidth(concat(stepper("Size", 16), stepper("Dither", 8))) - 1
+  end
+
   -- The bar above the palette: settings for the current tool.
   local function drawSettings()
     local hits = {}

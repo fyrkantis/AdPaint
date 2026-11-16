@@ -50,6 +50,14 @@ function M.run(files, monSide, monScale)
   })
   for _, name in ipairs(M.MODULES) do require(name)(ed) end
 
+  -- A text scale so big that the tool settings would be cut off is lowered.
+  local scaleNote
+  if monSide then
+    local want = display.getTextScale()
+    local sc = ed.fitTextScale(want)
+    if sc < want then scaleNote = "Text scale " .. sc .. " (max)" end
+  end
+
   local function main()
     ed.computeUi() -- prompts may be shown before the first tab exists
     for _, f in ipairs(files) do ed.openPath(f) end
@@ -57,6 +65,7 @@ function M.run(files, monSide, monScale)
       ed.addDoc(ed.blankDoc())
       ed.setStatus(ed.W >= 44 and "Tip: drop image files here (.jpg, .png, or .bmp)" or "Tip: drop images here", 6)
     end
+    if scaleNote then ed.setStatus(scaleNote, 6) end
     ed.cur = 1
     ed.applyPalette()
     ed.clampView(ed.doc())

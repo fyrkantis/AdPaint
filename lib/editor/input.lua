@@ -170,7 +170,13 @@ return function(ed)
     elseif e == "char" and ed.sel and not U.mods.ctrl then ed.textInsert(ev[2])
     elseif e == "paste" and ed.sel then ed.textInsert(ev[2])
     elseif e == "file_transfer" then ed.handleFiles(ev[2])
-    elseif e == "term_resize" or e == "monitor_resize" then ed.onResize()
+    elseif e == "term_resize" or e == "monitor_resize" then
+      ed.onResize()
+      -- monitor made smaller: lower the text scale until everything fits
+      -- (only ever shrinks, so it can't loop on its own resize events)
+      if U.monitor and e == "monitor_resize" and not ed.screenFits() and ed.display.getTextScale() > 0.5 then
+        ed.fitTextScale(ed.display.getTextScale() - 0.5)
+      end
     end
     while #ed.pendingFiles > 0 do ed.handleFiles(table.remove(ed.pendingFiles, 1)) end
   end

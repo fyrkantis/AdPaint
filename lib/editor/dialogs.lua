@@ -320,16 +320,41 @@ return function(ed)
     ed.applyPalette()
   end
 
+  -- Monitors: the screen must stay big enough for the tool settings bar.
+  local MIN_ROWS = 6 -- tabs, 2 canvas rows, settings, palette, tools
+
+  function ed.screenFits()
+    local w, h = ed.display.getSize()
+    return w >= ed.minScreenWidth() and h >= MIN_ROWS
+  end
+
+  -- Sets the largest text scale up to `want` (0.5-5, in steps of 0.5) at
+  -- which the screen still fits; returns it.
+  function ed.fitTextScale(want)
+    local mon = ed.display
+    local sc = max(0.5, min(5, floor(want * 2 + 0.5) / 2))
+    while true do
+      if mon.getTextScale() ~= sc then mon.setTextScale(sc) end
+      if sc <= 0.5 or ed.screenFits() then break end
+      sc = sc - 0.5
+    end
+    ed.onResize()
+    return sc
+  end
+
   -- Monitors: changes the text scale and saves it as the default.
   function ed.textScaleDialog()
     local r = U.prompt("Text scale (0.5-5): ", tostring(ed.display.getTextScale()))
-    local sc = tonumber(r or "")
-    if not sc then return end
-    sc = max(0.5, min(5, floor(sc * 2 + 0.5) / 2))
-    ed.display.setTextScale(sc)
+    local want = tonumber(r or "")
+    if not want then return end
+    want = max(0.5, min(5, floor(want * 2 + 0.5) / 2))
+    local sc = ed.fitTextScale(want)
     settings.set("adpaint.text_scale", sc)
     settings.save()
-    ed.onResize()
-    ed.setStatus("Text scale " .. sc .. " (saved as default)")
+    if sc < want then
+      ed.setStatus("Text scale " .. sc .. " (max, saved)", 6)
+    else
+      ed.setStatus("Text scale " .. sc .. " (saved as default)")
+    end
   end
 end

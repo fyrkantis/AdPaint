@@ -1,6 +1,6 @@
 -- ui: small terminal UI toolkit used by adpaint: colours that stay readable
 -- under any palette, button rows, and modal dialogs (text prompt, multiple
--- choice, anchor picker, paged message) that work with a mouse as well as on
+-- choice, anchor picker, scrolling message) that work with a mouse as well as on
 -- touch-only monitors (every dialog has tappable buttons on the bottom row).
 --
 --   local U = ui.new{
@@ -375,37 +375,86 @@ function M.new(ctx)
     if done then return ((pick - 1) % 3) / 2, floor((pick - 1) / 3) / 2 end
   end
 
-  -- Full-screen text (word-wrapped, paged); any key or tap continues.
-  function U.message(lines)
-    local W, H = win.getSize()
-    local wrapped = {}
+  -- Word-wraps lines to `width` columns. A line's leading spaces are kept
+  -- and continuation lines get the same indent; words longer than a line are
+  -- split.
+  function U.wrap(lines, width)
+    local out = {}
     for _, l in ipairs(lines) do
-      if l == "" then wrapped[#wrapped + 1] = "" end
-      local cur = ""
+      local indent = l:match("^ *")
+      if #indent >= width then indent = "" end
+      local cur = indent
+      local empty = true
       for word in l:gmatch("%S+") do
-        if #cur > 0 and #cur + 1 + #word > W - 2 then wrapped[#wrapped + 1] = cur; cur = word
-        else cur = #cur > 0 and (cur .. " " .. word) or word end
+        while #indent + #word > width do -- too long for any line: split it
+          if not empty then out[#out + 1] = cur end
+          local room = width - #indent
+          out[#out + 1] = indent .. word:sub(1, room)
+          word = word:sub(room + 1)
+          cur, empty = indent, true
+        end
+        if empty then cur = indent .. word; empty = false
+        elseif #cur + 1 + #word > width then out[#out + 1] = cur; cur = indent .. word
+        else cur = cur .. " " .. word end
       end
-      if #cur > 0 then wrapped[#wrapped + 1] = cur end
+      out[#out + 1] = empty and "" or cur
     end
-    local per = H - 2
-    for first = 1, #wrapped, per do
-      win.setVisible(false)
+    return out
+  end
+
+  -- Full-screen text that scrolls: More / Space (a third of a screen), Down,
+  -- Page Down and the scroll wheel move it down; Up / Page Up move it back. It only closes on purpose
+  -- (Close button, Enter, Q or Backspace), so a repeated key or tap can't
+  -- skip past the end.
+  function U.message(lines)
+    local top = 1
+    local hits, wrapped, rows
+    local function layout()
+      local W, H = win.getSize()
+      wrapped = U.wrap(lines, max(1, W - 2))
+      rows = max(1, H - 1)
+      top = max(1, min(top, #wrapped - rows + 1))
+      return W, H
+    end
+    local function scroll(n) top = top + n; layout() end
+    local function step() return max(1, floor(rows / 3)) end
+    return U.modal(function()
+      local W, H = layout()
       win.setBackgroundColour(2 ^ col.dark); win.setTextColour(2 ^ col.text)
-      for y = 1, H do win.setCursorPos(1, y); win.clearLine() end
-      for i = first, min(#wrapped, first + per - 1) do
-        win.setCursorPos(2, i - first + 1); win.write(wrapped[i]:sub(1, W - 2))
+      for y = 1, rows do
+        win.setCursorPos(1, y); win.clearLine()
+        local l = wrapped[top + y - 1]
+        if l then win.setCursorPos(2, y); win.write(l) end
       end
-      win.setCursorPos(2, H)
-      win.setTextColour(2 ^ col.dim)
-      win.write(first + per <= #wrapped and "More: any key or tap" or "Any key or tap closes")
-      win.setVisible(true)
-      local e
-      repeat
-        e = os.pullEventRaw()
-      until e == "terminate" or e == "key" or e == "mouse_click" or e == "monitor_touch"
-      if e == "terminate" then return end
-    end
+      local atEnd = top + rows - 1 >= #wrapped
+      local buttons = W >= 26
+        and { { "Up", "up" }, { atEnd and "End" or "More", "down" }, { "Close", "close" } }
+        or { { "\30", "up" }, { "\31", "down" }, { "\215", "close" } }
+      local where = #wrapped <= rows and "" or (" %d-%d/%d"):format(top, min(#wrapped, top + rows - 1), #wrapped)
+      hits = U.bottomBar(where, buttons)
+    end, function(ev, button, x, y)
+      local _, H = win.getSize()
+      local e = ev[1]
+      if e == "terminate" then return true
+      elseif button and y == H then
+        local r = U.hitButton(hits, x)
+        if r == "close" then return true
+        elseif r == "down" then scroll(step())
+        elseif r == "up" then scroll(-step()) end
+      elseif e == "mouse_scroll" and not U.monitor then scroll(ev[2])
+      elseif e == "key" then
+        local k = ev[2]
+        if k == keys.enter or k == keys.numPadEnter or k == keys.q or k == keys.backspace then
+          if not ev[3] then return true end -- ignore auto-repeat
+        elseif k == keys.down then scroll(1)
+        elseif k == keys.up then scroll(-1)
+        elseif k == keys.space then scroll(step())
+        elseif k == keys.pageDown then scroll(rows - 1)
+        elseif k == keys.pageUp then scroll(1 - rows)
+        elseif k == keys.home then top = 1
+        elseif k == keys["end"] then scroll(#wrapped) end
+      end
+    end)
   end
 
   return U
