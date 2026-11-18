@@ -3,6 +3,7 @@
 local adimg = require("lib.formats.adimg")
 local paint = require("lib.paint")
 local displays = require("lib.displays")
+local features = require("lib.features")
 
 local floor, max, min = math.floor, math.max, math.min
 
@@ -11,7 +12,8 @@ local HELP = {
   "",
   "Left click = primary colour, right = secondary.",
   "Middle drag / arrows / scroll (shift: sideways) pans.",
-  "Drag image files onto the window to import them.",
+  features.import and "Drag image files onto the window to import them."
+    or "Drag .adi files onto the window to open them.",
   "",
   "B brush  F fill  T text  I pick  P pan",
   "E (or Ctrl+E) edit colour L, with live preview",

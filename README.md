@@ -21,6 +21,7 @@ lib/history.lua    undo/redo for any document holding an adimg image
 lib/ui.lua         terminal UI toolkit: palette-proof colours, button rows, prompt,
                    multiple choice, anchor picker, scrolling message (mouse and touch)
 lib/cli.lua        shell helpers: completion, "setup", yielding during long work
+lib/features.lua   flags for optional parts, replaced by builds that leave them out
 
 lib/editor/        the editor, split by concern; each module adds its functions to
                    one shared state table (see app.lua for the order):
@@ -61,9 +62,19 @@ Download `adpaint.lua` (and `adview.lua`) from the latest
 libraries bundled in. Drag them onto the computer while it is running `import`.
 Alternatively keep the source layout (`adpaint.lua` next to a `lib/` folder).
 
+`adpaint-lite.lua` is adpaint without image import, about a third smaller (66 KB instead of
+95 KB minified): it opens and saves `.adi` files only (dropped `.adi` files open too), and has
+no "Import image..." menu entry and no `convert` command. Everything else is the same code as
+the full version. Convert images with the full adpaint, then use them in the lite one.
+
 To make the bundles yourself, run `python3 build.py`; they are written to `dist/`
 (which is not committed). Modules are found automatically (every `"lib.…"` string that names
 a file in `lib/`), so new modules need no build changes.
+
+The builds are listed in `TARGETS` in build.py. A target can leave optional parts out:
+`exclude` names modules that are not bundled (each gets a stub that fails with a clear message
+if anything still loads it), and `features` sets the flags in `lib/features.lua` that the code
+checks before using those parts. That's how `adpaint-lite.lua` is made from the same sources.
 
 `python3 build.py --minify` also writes minified bundles to `dist/min/` (about half the size:
 comments and whitespace removed, local variables renamed to short names; globals, table fields

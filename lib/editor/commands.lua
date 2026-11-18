@@ -1,5 +1,7 @@
 -- Editor commands: the menu, keyboard shortcuts and small setting changes.
 -- Install after the modules whose functions the tables below refer to.
+local features = require("lib.features")
+
 local max, min = math.max, math.min
 
 return function(ed)
@@ -27,6 +29,11 @@ return function(ed)
     { "Close tab", "^W", function() ed.closeDoc(ed.cur) end, "\215" },
     { "Quit", "^Q", ed.quit },
   }
+  if not features.import then
+    for i, it in ipairs(ed.menuItems) do
+      if it[3] == ed.importDialog then table.remove(ed.menuItems, i); break end
+    end
+  end
   if ed.U.monitor then
     -- right under "Reset colours"
     local at = 1

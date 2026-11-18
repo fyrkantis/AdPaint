@@ -2,6 +2,7 @@
 -- tabs, quit, and files dropped onto the window.
 local adimg = require("lib.formats.adimg")
 local cli = require("lib.cli")
+local features = require("lib.features")
 
 local floor, max, min = math.floor, math.max, math.min
 
@@ -28,15 +29,18 @@ return function(ed)
   -- Opens file contents `data` (named `name`) in a new tab: .adi files
   -- directly, images after asking how to import them.
   function ed.importData(name, data)
-    convert = convert or require("lib.convert")
-    local fmt = convert.detect(data)
-    if fmt == "adimg" then
+    if data:sub(1, 6) == "ADIMG " then
       local img, err = adimg.parse(data, true)
       if not img then ed.setStatus(name .. ": " .. err); return end
       local d = ed.newDoc(img, shell.resolve(fs.getName(name)))
       ed.addDoc(d)
       return d
     end
+    if not features.import then
+      ed.setStatus(fs.getName(name) .. ": only .adi files in adpaint lite", 8)
+      return
+    end
+    convert = convert or require("lib.convert")
     local info, err = convert.info(data)
     if not info then ed.setStatus(name .. ": " .. tostring(err)); return end
     local dw = convert.fitCells(info, ed.W, ed.viewH())
@@ -113,7 +117,7 @@ return function(ed)
     if r and r ~= "" then ed.openPath(r) end
   end
 
-  function ed.importDialog()
+  function ed.importDialog() -- only in the menu when features.import
     local r = U.prompt("Image file: ", "", ed.completePath)
     if r and r ~= "" then
       local data = cli.readFile(shell.resolve(r))

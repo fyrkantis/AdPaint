@@ -2,6 +2,7 @@
 -- one shared state table and runs the main loop.
 local adimg = require("lib.formats.adimg")
 local ui = require("lib.ui")
+local features = require("lib.features")
 
 local M = {}
 
@@ -62,8 +63,14 @@ function M.run(files, monSide, monScale)
     ed.computeUi() -- prompts may be shown before the first tab exists
     for _, f in ipairs(files) do ed.openPath(f) end
     if #ed.docs == 0 then
+      local msg = ed.status -- e.g. why a file given on the command line didn't open
       ed.addDoc(ed.blankDoc())
-      ed.setStatus(ed.W >= 44 and "Tip: drop image files here (.jpg, .png, or .bmp)" or "Tip: drop images here", 6)
+      if msg then ed.setStatus(msg, 8)
+      elseif features.import then
+        ed.setStatus(ed.W >= 44 and "Tip: drop image files here (.jpg, .png, or .bmp)" or "Tip: drop images here", 6)
+      else
+        ed.setStatus(ed.W >= 30 and "Tip: drop .adi files here" or "Tip: drop .adi here", 6)
+      end
     end
     if scaleNote then ed.setStatus(scaleNote, 6) end
     ed.cur = 1

@@ -7,15 +7,23 @@
 local progDir = fs.getDir(shell.getRunningProgram())
 package.path = "/" .. fs.combine(progDir, "?.lua") .. ";" .. package.path
 local cli = require("lib.cli")
+local features = require("lib.features")
 
-local USAGE = [[
+local USAGE_OPEN = features.import and [[
 Usage:
  adpaint [file ...]   open .adi files in tabs; PNG,
                       JPEG and BMP files are imported
+]] or [[
+Usage (adpaint lite: no image import):
+ adpaint [file ...]   open .adi files in tabs
+]]
+local USAGE_MONITOR = [[
  adpaint -m <side> [-s <scale>] [file ...]
                       paint on an advanced monitor;
                       -s text scale 0.5-5 (default:
                       setting adpaint.text_scale)
+]]
+local USAGE_CONVERT = [[
  adpaint convert <image> [out.adi] [options]
    -w, --width <n>    width in cells (default: fit
                       this terminal)
@@ -26,11 +34,15 @@ Usage:
        --mode <m>     bars (default)/fill/stretch
                       when the aspect ratio changes
    -f, --force        overwrite out.adi
+]]
+local USAGE_END = [[
  adpaint setup        filename completion at boot
  adpaint help         this text
 
-While adpaint runs, drag image files from your
-computer onto its window to import them.]]
+While adpaint runs, drag ]] .. (features.import and [[image files from your
+computer onto its window to import them.]] or [[.adi files from your
+computer onto its window to open them.]])
+local USAGE = USAGE_OPEN .. USAGE_MONITOR .. (features.import and USAGE_CONVERT or "") .. USAGE_END
 
 ---------------------------------------------------------------------------
 -- Shell integration: argument completion, "setup", "convert"
@@ -54,7 +66,10 @@ local function completeArgs(sh, index, text, previous)
     return c.choice(sh, text, previous, isConvert and CONVERT_OPTS or { "-m", "-s" }, true)
   end
   local out = {}
-  if index == 1 then cli.addChoices(out, c.choice(sh, text, previous, { "help", "convert", "setup" }, true)) end
+  if index == 1 then
+    cli.addChoices(out, c.choice(sh, text, previous,
+      features.import and { "help", "convert", "setup" } or { "help", "setup" }, true))
+  end
   return cli.addChoices(out, c.dirOrFile(sh, text, previous, true))
 end
 cli.registerCompletion(completeArgs)
@@ -119,7 +134,14 @@ if cli.isHelp(command) then
   return
 end
 if command == "setup" then setup(); return end
-if command == "convert" then cliConvert({ table.unpack(args, 2) }); return end
+if command == "convert" then
+  if not features.import then
+    printError("This is adpaint lite, which can't convert images. Use the full adpaint for that.")
+    return
+  end
+  cliConvert({ table.unpack(args, 2) })
+  return
+end
 
 settings.define("adpaint.text_scale", {
   description = "Default text scale when adpaint runs on a monitor (-m).",
